@@ -14,7 +14,7 @@
 
 import { createPublicClient, http } from 'viem';
 import { mainnet, arbitrum, base, sepolia } from 'viem/chains';
-import { createRawCIDv1, downloadJson, verifyCid, verifyQuoteProof } from 'indelible-protocol';
+import { createRawCIDv1, downloadJson, verifyCid, verifyQuoteProof } from 'indelible';
 
 // ── Chain / RPC configuration (mirrors verify.js) ───────────────────────────
 
