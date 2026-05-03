@@ -129,6 +129,17 @@ body {
   min-width: 100px;
 }
 
+.settings-hint {
+  font-size: 11px;
+  color: var(--ink-subtle);
+  line-height: 1.5;
+}
+.settings-hint--sub {
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+  margin-top: 2px;
+}
+
 .settings-select,
 .settings-input {
   flex: 1;

@@ -77,42 +77,61 @@ const quotesContainer      = document.getElementById('quotesContainer');
 
 // ── Viem client ──────────────────────────────────────────────────────────────
 
-let client;
+/** Per-chain custom RPC URLs keyed by chain name. Loaded from storage. */
+let customRpcUrls = {};
 
-function buildClient() {
-  const chainKey = chainSelect.value;
-  const chain    = chains[chainKey] ?? sepolia;
-  const rpcUrl   = rpcInput.value.trim() || defaultRpcUrls[chainKey] || defaultRpcUrls.sepolia;
+/** Human-readable display names for numeric chain IDs. */
+const chainDisplayNames = {
+  1:        'Ethereum',
+  42161:    'Arbitrum',
+  8453:     'Base',
+  11155111: 'Sepolia',
+};
 
-  client = createPublicClient({ chain, transport: http(rpcUrl) });
+/**
+ * Build a viem client for a given chain ID.
+ * Uses the user's stored custom RPC URL for that chain if set,
+ * otherwise falls back to the default Alchemy endpoint.
+ * If chainId is unrecognised or undefined, falls back to the chain
+ * currently selected in the settings panel.
+ *
+ * @param {number|undefined} chainId
+ * @returns {import('viem').PublicClient}
+ */
+function buildClientForChain(chainId) {
+  const entry = Object.entries(chains).find(([, c]) => c.id === chainId);
+  const [chainKey, chain] = entry ?? [chainSelect.value, chains[chainSelect.value] ?? sepolia];
+  const rpcUrl = customRpcUrls[chainKey] || defaultRpcUrls[chainKey] || defaultRpcUrls.sepolia;
+  return createPublicClient({ chain, transport: http(rpcUrl) });
 }
 
 // ── Settings ──────────────────────────────────────────────────────────────────
 
 async function loadSettings() {
-  const saved = await chrome.storage.sync.get({ chain: 'sepolia', rpcUrl: '' });
-  chainSelect.value = saved.chain;
-  rpcInput.value    = saved.rpcUrl;
-  buildClient();
+  const saved = await chrome.storage.sync.get({ customRpcUrls: {} });
+  customRpcUrls = saved.customRpcUrls;
+  // Show the stored custom RPC URL for the currently selected chain.
+  rpcInput.value = customRpcUrls[chainSelect.value] || '';
 }
 
 async function saveSettings() {
-  await chrome.storage.sync.set({
-    chain:  chainSelect.value,
-    rpcUrl: rpcInput.value.trim(),
-  });
+  customRpcUrls[chainSelect.value] = rpcInput.value.trim();
+  await chrome.storage.sync.set({ customRpcUrls });
 }
 
 settingsToggle.addEventListener('click', () => {
   settingsPanel.hidden = !settingsPanel.hidden;
 });
 
-chainSelect.addEventListener('change', () => { buildClient(); saveSettings(); });
+// When the chain selector changes, show the stored custom RPC for that chain.
+chainSelect.addEventListener('change', () => {
+  rpcInput.value = customRpcUrls[chainSelect.value] || '';
+});
 
 let rpcDebounce;
 rpcInput.addEventListener('input', () => {
   clearTimeout(rpcDebounce);
-  rpcDebounce = setTimeout(() => { buildClient(); saveSettings(); }, 500);
+  rpcDebounce = setTimeout(saveSettings, 500);
 });
 
 // ── Tab navigation ────────────────────────────────────────────────────────────
@@ -166,25 +185,9 @@ function renderResult(box, heading, details, verification, valid = true) {
   }
 }
 
-// ── Chain auto-switch ─────────────────────────────────────────────────────────
-
-/**
- * If the attestation or proof data embeds a chainId, switch the chain
- * selector to match so the correct network is queried automatically.
- *
- * @param {number|undefined} chainId
- */
-function autoSwitchChain(chainId) {
-  if (!chainId) return;
-  const entry = Object.entries(chains).find(([, c]) => c.id === chainId);
-  if (entry) {
-    chainSelect.value = entry[0];
-    buildClient();
-  }
-}
-
 // ── Article tab logic ────────────────────────────────────────────────────────
-
+/** Chain ID extracted from the page's attestation metadata (set during init). */
+let pageChainId = null;
 let downloadVerifyRefData = null;
 
 /** Update the CID field whenever the article text changes. */
@@ -224,7 +227,7 @@ articleForm.addEventListener('submit', async (event) => {
   downloadVerifyRefBtn.hidden = true;
 
   try {
-    const verification = await verifyCid(client, cid, authority);
+    const verification = await verifyCid(buildClientForChain(pageChainId), cid, authority);
     renderResult(verifyResult, verifyHeading, verifyDetails, verification);
 
     // Offer an attestation reference download for the most recent attestation.
@@ -232,7 +235,7 @@ articleForm.addEventListener('submit', async (event) => {
     if (refAtt?.index != null) {
       downloadVerifyRefData = {
         ipfsCid:           refAtt.cid,
-        chainId:           (chains[chainSelect.value] ?? sepolia).id,
+        chainId:           pageChainId ?? (chains[chainSelect.value] ?? sepolia).id,
         authority:         refAtt.authority,
         attestationIndex:  Number(refAtt.index),
       };
@@ -368,12 +371,10 @@ function buildQuoteCard(quote, index) {
     resultBox.hidden     = true;
     downloadBtn.hidden   = true;
 
-    // Auto-switch chain if embedded in the proof data.
-    autoSwitchChain(quote.proofData.chainId);
-
     try {
+      const quoteClient = buildClientForChain(quote.proofData.chainId);
       const { verification, quoteText: extractedText, allProofsValid } =
-        await verifyQuoteProof(client, quote.proofData);
+        await verifyQuoteProof(quoteClient, quote.proofData);
 
       renderResult(resultBox, resultHeading, resultDetails, verification, allProofsValid);
       quoteText.textContent = extractedText ? `"${extractedText}"` : '';
@@ -392,7 +393,7 @@ function buildQuoteCard(quote, index) {
       if (allProofsValid && refAtt?.index != null) {
         refData = {
           ipfsCid:          refAtt.cid,
-          chainId:          (chains[chainSelect.value] ?? sepolia).id,
+          chainId:          quote.proofData.chainId ?? (chains[chainSelect.value] ?? sepolia).id,
           authority:        refAtt.authority,
           attestationIndex: Number(refAtt.index),
         };
@@ -453,12 +454,15 @@ function renderQuotes(quotes) {
 
   if (pageData) {
     // ── Indelible content detected ────────────────────────────────────────
-    pageStatus.textContent = '✓ Indelible content detected on this page';
+
+    // Store the chain ID from the attestation — used for all verification on this page.
+    pageChainId = pageData.attestation?.chainId ?? null;
+    const chainLabel = pageChainId
+      ? ` · ${chainDisplayNames[pageChainId] ?? `Chain ${pageChainId}`}`
+      : '';
+    pageStatus.textContent = `✓ Indelible content detected${chainLabel}`;
     pageStatus.className   = 'page-status detected';
     pageStatus.hidden      = false;
-
-    // Auto-switch chain if the attestation metadata specifies one.
-    autoSwitchChain(pageData.attestation?.chainId);
 
     // Populate article text and compute CID.
     if (pageData.text) {
