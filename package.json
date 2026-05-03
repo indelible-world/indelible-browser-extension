@@ -1,0 +1,20 @@
+{
+  "name": "indelible-browser-extension",
+  "version": "1.0.0",
+  "description": "Chrome extension for verifying Indelible-attested articles and quotes",
+  "private": true,
+  "scripts": {
+    "build": "webpack --mode production",
+    "dev": "webpack --mode development --watch"
+  },
+  "dependencies": {
+    "indelible-protocol": "*",
+    "viem": "^2.0.0"
+  },
+  "devDependencies": {
+    "buffer": "^6.0.3",
+    "process": "^0.11.10",
+    "webpack": "^5.91.0",
+    "webpack-cli": "^5.1.4"
+  }
+}

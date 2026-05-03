@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Indelible Verifier</title>
+  <link rel="stylesheet" href="src/popup/popup.css">
+</head>
+<body>
+
+  <!-- ── Header ──────────────────────────────────────────────────────── -->
+  <header class="header">
+    <span class="header-title">Indelible Verifier</span>
+    <button class="settings-btn" id="settingsToggle" title="Settings">⚙</button>
+  </header>
+
+  <!-- ── Settings panel ──────────────────────────────────────────────── -->
+  <div class="settings-panel" id="settingsPanel" hidden>
+    <div class="settings-row">
+      <label class="settings-label" for="chainSelect">Chain</label>
+      <select id="chainSelect" class="settings-select">
+        <option value="sepolia" selected>Sepolia (testnet)</option>
+        <option value="ethereum">Ethereum</option>
+        <option value="arbitrum">Arbitrum</option>
+        <option value="base">Base</option>
+      </select>
+    </div>
+    <div class="settings-row">
+      <label class="settings-label" for="rpcInput">Custom RPC URL</label>
+      <input id="rpcInput" class="settings-input" placeholder="Leave blank to use default" />
+    </div>
+  </div>
+
+  <!-- ── Tab nav ──────────────────────────────────────────────────────── -->
+  <nav class="tab-nav">
+    <button class="tab-btn active" data-tab="article">Verify Article</button>
+    <button class="tab-btn" data-tab="quotes">Verify Quotes</button>
+  </nav>
+
+  <!-- ── Page status banner ───────────────────────────────────────────── -->
+  <div id="pageStatus" class="page-status" hidden></div>
+
+  <!-- ══════════════════════════════════════════════════════════════════ -->
+  <!-- Article tab                                                        -->
+  <!-- ══════════════════════════════════════════════════════════════════ -->
+  <section id="tab-article" class="tab-panel">
+
+    <form id="articleForm">
+      <label class="field-label" for="articleInput">Article Text</label>
+      <textarea id="articleInput" class="field-input text-area"
+                placeholder="Paste article text, or it will be extracted automatically from the page…"></textarea>
+
+      <label class="field-label" for="cidField">CID</label>
+      <input type="text" id="cidField" class="field-input"
+             placeholder="Computed automatically from article text" />
+
+      <label class="field-label" for="authorityInput">Authority Address
+        <span class="optional">(optional)</span>
+      </label>
+      <input type="text" id="authorityInput" class="field-input"
+             placeholder="0x…" />
+
+      <div class="form-actions">
+        <button type="submit" class="btn-primary" id="verifyButton">Verify</button>
+        <span id="verifyStatus" class="status-msg" hidden>Verifying…</span>
+      </div>
+    </form>
+
+    <div id="verifyResult" class="result-box" hidden>
+      <h3 id="verifyHeading" class="result-heading"></h3>
+      <ul id="verifyDetails" class="result-details"></ul>
+      <button type="button" class="btn-secondary" id="downloadVerifyRefButton" hidden>
+        Download Attestation Reference
+      </button>
+    </div>
+
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════════ -->
+  <!-- Quotes tab                                                         -->
+  <!-- ══════════════════════════════════════════════════════════════════ -->
+  <section id="tab-quotes" class="tab-panel" hidden>
+
+    <p id="noQuotesMsg" class="empty-msg" hidden>
+      No verified quotes (<code>data-indelible-quote</code>) were detected on this page.
+    </p>
+
+    <div id="quotesContainer"></div>
+
+  </section>
+
+  <!-- ── Scripts ──────────────────────────────────────────────────────── -->
+  <script src="dist/popup.js"></script>
+</body>
+</html>
