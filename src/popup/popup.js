@@ -382,7 +382,7 @@ function buildQuoteCard(quote, index) {
       quoteText.textContent = extractedText ? `"${extractedText}"` : '';
 
       // Compare page text against the extracted proof text.
-      if (allProofsValid && extractedText && extractedText !== quote.text) {
+      if (allProofsValid && extractedText && !extractedText.includes(quote.text)) {
         mismatchPageText.textContent  = `"${quote.text}"`;
         mismatchProofText.textContent = `"${extractedText}"`;
         mismatchBox.hidden = false;
