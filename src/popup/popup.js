@@ -16,6 +16,8 @@ import { createPublicClient, http } from 'viem';
 import { mainnet, arbitrum, base, sepolia } from 'viem/chains';
 import { createRawCIDv1, downloadJson, verifyCid, verifyQuoteProof } from 'indelible';
 
+const browserAPI = globalThis.browser ?? globalThis.chrome;
+
 // ── Chain / RPC configuration (mirrors verify.js) ───────────────────────────
 
 const ALCHEMY_KEY = '3Fxk_v1qhXH-B5SjNWXYo'; // Restricted to Indelible contracts
@@ -108,7 +110,7 @@ function buildClientForChain(chainId) {
 // ── Settings ──────────────────────────────────────────────────────────────────
 
 async function loadSettings() {
-  const saved = await chrome.storage.sync.get({ customRpcUrls: {} });
+  const saved = await browserAPI.storage.sync.get({ customRpcUrls: {} });
   customRpcUrls = saved.customRpcUrls;
   // Show the stored custom RPC URL for the currently selected chain.
   rpcInput.value = customRpcUrls[chainSelect.value] || '';
@@ -116,7 +118,7 @@ async function loadSettings() {
 
 async function saveSettings() {
   customRpcUrls[chainSelect.value] = rpcInput.value.trim();
-  await chrome.storage.sync.set({ customRpcUrls });
+  await browserAPI.storage.sync.set({ customRpcUrls });
 }
 
 settingsToggle.addEventListener('click', () => {
@@ -444,9 +446,9 @@ function renderQuotes(quotes) {
   // Query the active tab's content script for Indelible data.
   let pageData = null;
   try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const [tab] = await browserAPI.tabs.query({ active: true, currentWindow: true });
     if (tab?.id) {
-      pageData = await chrome.tabs.sendMessage(tab.id, { type: 'GET_INDELIBLE_DATA' });
+      pageData = await browserAPI.tabs.sendMessage(tab.id, { type: 'GET_INDELIBLE_DATA' });
     }
   } catch (_) {
     // Content script not available on this page (e.g. chrome:// URLs).

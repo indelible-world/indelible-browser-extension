@@ -5,8 +5,10 @@
  * Indelible HTMLData Standard attributes from the live DOM.
  *
  * Communicates with the popup and background service worker via
- * chrome.runtime messaging.
+ * the browser extension messaging API.
  */
+
+const browserAPI = globalThis.browser ?? globalThis.chrome;
 
 // ── Text extraction helpers (mirrors indelible.js) ──────────────────────────
 
@@ -112,7 +114,7 @@ function extractPageData() {
 // ── Messaging ────────────────────────────────────────────────────────────────
 
 // Respond to requests from the popup.
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+browserAPI.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === 'GET_INDELIBLE_DATA') {
     sendResponse(extractPageData());
   }
@@ -125,6 +127,6 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 (function notifyBackground() {
   const data = extractPageData();
   if (data) {
-    chrome.runtime.sendMessage({ type: 'INDELIBLE_DETECTED', data });
+    browserAPI.runtime.sendMessage({ type: 'INDELIBLE_DETECTED', data });
   }
 })();
