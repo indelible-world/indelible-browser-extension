@@ -12,41 +12,18 @@
  *     against the blockchain using indelible-protocol.
  */
 
-import { createPublicClient, http } from 'viem';
-import { mainnet, arbitrum, base, sepolia } from 'viem/chains';
-import { createRawCIDv1, downloadJson, verifyCid, verifyQuoteProof } from 'indelible';
+import {
+  createRawCIDv1,
+  downloadJson,
+  verifyCid,
+  verifyQuoteProof,
+  CHAINS,
+  CHAIN_DISPLAY_NAMES,
+  createIndelibleClient,
+  getChainKeyById,
+} from 'indelible';
 
 const browserAPI = globalThis.browser ?? globalThis.chrome;
-
-// ── Chain / RPC configuration (mirrors verify.js) ───────────────────────────
-
-const ALCHEMY_KEY = '3Fxk_v1qhXH-B5SjNWXYo'; // Restricted to Indelible contracts
-
-const chains = {
-  ethereum: mainnet,
-  arbitrum,
-  base,
-  sepolia,
-};
-
-const defaultRpcUrls = {
-  ethereum: `https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`,
-  arbitrum: `https://arb-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`,
-  base:     `https://base-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`,
-  sepolia:  `https://eth-sepolia.g.alchemy.com/v2/${ALCHEMY_KEY}`,
-};
-
-/** Result code → CSS class (mirrors codeClassMap in verify.js) */
-const codeClassMap = {
-  0: 'result-not-found',
-  1: 'result-verified',
-  2: 'result-unverified',
-  3: 'result-revoked',
-  4: 'result-warning',
-};
-
-/** Priority order when multiple result codes are present */
-const codePriority = [2, 3, 0, 4, 1];
 
 // ── DOM references ───────────────────────────────────────────────────────────
 
@@ -82,18 +59,10 @@ const quotesContainer      = document.getElementById('quotesContainer');
 /** Per-chain custom RPC URLs keyed by chain name. Loaded from storage. */
 let customRpcUrls = {};
 
-/** Human-readable display names for numeric chain IDs. */
-const chainDisplayNames = {
-  1:        'Ethereum',
-  42161:    'Arbitrum',
-  8453:     'Base',
-  11155111: 'Sepolia',
-};
-
 /**
  * Build a viem client for a given chain ID.
  * Uses the user's stored custom RPC URL for that chain if set,
- * otherwise falls back to the default Alchemy endpoint.
+ * otherwise falls back to the module's default + public RPC URLs.
  * If chainId is unrecognised or undefined, falls back to the chain
  * currently selected in the settings panel.
  *
@@ -101,10 +70,8 @@ const chainDisplayNames = {
  * @returns {import('viem').PublicClient}
  */
 function buildClientForChain(chainId) {
-  const entry = Object.entries(chains).find(([, c]) => c.id === chainId);
-  const [chainKey, chain] = entry ?? [chainSelect.value, chains[chainSelect.value] ?? sepolia];
-  const rpcUrl = customRpcUrls[chainKey] || defaultRpcUrls[chainKey] || defaultRpcUrls.sepolia;
-  return createPublicClient({ chain, transport: http(rpcUrl) });
+  const chainKey = (chainId != null && getChainKeyById(chainId)) || chainSelect.value;
+  return createIndelibleClient(chainKey, customRpcUrls[chainKey]);
 }
 
 // ── Settings ──────────────────────────────────────────────────────────────────
@@ -152,16 +119,6 @@ tabBtns.forEach(btn => {
 // ── Utility ───────────────────────────────────────────────────────────────────
 
 /**
- * Pick the primary result code from an array using codePriority order.
- *
- * @param {number[]} codes
- * @returns {number}
- */
-function primaryCode(codes) {
-  return codePriority.find(c => codes.includes(c)) ?? codes[codes.length - 1];
-}
-
-/**
  * Render a verification result into a given result-box element.
  *
  * @param {Element}  box         .result-box element
@@ -171,8 +128,7 @@ function primaryCode(codes) {
  * @param {boolean}  valid        allProofsValid (always true for verifyCid)
  */
 function renderResult(box, heading, details, verification, valid = true) {
-  const code = primaryCode(verification.resultCode);
-  box.className  = `result-box ${valid ? (codeClassMap[code] ?? '') : 'result-unverified'}`;
+  box.className  = `result-box ${valid ? (verification.cssClass ?? '') : 'result-unverified'}`;
   heading.textContent = valid ? verification.headline : 'Invalid Proof';
 
   details.innerHTML = '';
@@ -237,7 +193,7 @@ articleForm.addEventListener('submit', async (event) => {
     if (refAtt?.index != null) {
       downloadVerifyRefData = {
         ipfsCid:           refAtt.cid,
-        chainId:           pageChainId ?? (chains[chainSelect.value] ?? sepolia).id,
+        chainId:           pageChainId ?? (CHAINS[chainSelect.value] ?? CHAINS.sepolia).id,
         authority:         refAtt.authority,
         attestationIndex:  Number(refAtt.index),
       };
@@ -395,7 +351,7 @@ function buildQuoteCard(quote, index) {
       if (allProofsValid && refAtt?.index != null) {
         refData = {
           ipfsCid:          refAtt.cid,
-          chainId:          quote.proofData.chainId ?? (chains[chainSelect.value] ?? sepolia).id,
+          chainId:          quote.proofData.chainId ?? (CHAINS[chainSelect.value] ?? CHAINS.sepolia).id,
           authority:        refAtt.authority,
           attestationIndex: Number(refAtt.index),
         };
@@ -460,7 +416,7 @@ function renderQuotes(quotes) {
     // Store the chain ID from the attestation — used for all verification on this page.
     pageChainId = pageData.attestation?.chainId ?? null;
     const chainLabel = pageChainId
-      ? ` · ${chainDisplayNames[pageChainId] ?? `Chain ${pageChainId}`}`
+      ? ` · ${CHAIN_DISPLAY_NAMES[pageChainId] ?? `Chain ${pageChainId}`}`
       : '';
     pageStatus.textContent = `✓ Indelible content detected${chainLabel}`;
     pageStatus.className   = 'page-status detected';
