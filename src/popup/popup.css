@@ -465,6 +465,10 @@ form {
   gap: 6px;
 }
 
+.quote-mismatch[hidden] {
+  display: none;
+}
+
 .quote-mismatch-heading {
   font-size: 12px;
   font-weight: 600;
