@@ -21,6 +21,8 @@ import {
   CHAIN_DISPLAY_NAMES,
   createIndelibleClient,
   getChainKeyById,
+  prettifyTimestamp,
+  ens,
 } from 'indelible';
 
 const browserAPI = globalThis.browser ?? globalThis.chrome;
@@ -53,6 +55,13 @@ const downloadVerifyRefBtn = document.getElementById('downloadVerifyRefButton');
 // Quotes tab
 const noQuotesMsg          = document.getElementById('noQuotesMsg');
 const quotesContainer      = document.getElementById('quotesContainer');
+
+// Domain authority section
+const domainSection        = document.getElementById('domainSection');
+const domainResult         = document.getElementById('domainResult');
+const domainHeading        = document.getElementById('domainHeading');
+const domainDetails        = document.getElementById('domainDetails');
+const domainStatus         = document.getElementById('domainStatus');
 
 // ── Viem client ──────────────────────────────────────────────────────────────
 
@@ -147,6 +156,145 @@ function renderResult(box, heading, details, verification, valid = true) {
 /** Chain ID extracted from the page's attestation metadata (set during init). */
 let pageChainId = null;
 let downloadVerifyRefData = null;
+/** Hostname of the active tab (e.g. "www.nytimes.com"). */
+let pageHostname = null;
+
+/**
+ * Render a result line into the domain section.
+ *
+ * @param {'verified'|'not-found'|'unverified'|'error'} kind
+ * @param {string} headline
+ * @param {string[]} lines
+ */
+function renderDomainResult(kind, headline, lines) {
+  const cls = {
+    verified:   'result-verified',
+    'not-found':'result-not-found',
+    unverified: 'result-unverified',
+    error:      'result-not-found',
+  }[kind] ?? '';
+
+  domainResult.className     = `result-box ${cls}`;
+  domainHeading.textContent  = headline;
+  domainDetails.innerHTML    = '';
+  for (const line of lines) {
+    const li = document.createElement('li');
+    li.textContent = line;
+    domainDetails.appendChild(li);
+  }
+  domainResult.hidden = false;
+}
+
+/**
+ * Candidate hostnames to look up against ENS bindings — strips a leading "www."
+ * and falls back to the registrable parent (e.g. "nytimes.com" from
+ * "subdomain.nytimes.com"). All candidates are lower-cased.
+ *
+ * @param {string} hostname
+ * @returns {string[]}
+ */
+function domainBindingCandidates(hostname) {
+  const host = hostname.toLowerCase().replace(/^www\./, '');
+  const candidates = new Set([host]);
+
+  // Also try the registrable (last two labels). Naive but good enough for
+  // common TLDs like .com / .org / .net used by news domains.
+  const parts = host.split('.');
+  if (parts.length > 2) {
+    candidates.add(parts.slice(-2).join('.'));
+  }
+  return [...candidates];
+}
+
+/**
+ * Check whether the active tab's hostname was bound to `authority` via the
+ * Indelible ENS contract at `attestationTimestamp`, then render the result.
+ *
+ * @param {`0x${string}`} authority
+ * @param {number} attestationTimestamp  Unix seconds the attestation was published.
+ * @param {number|null} chainId          Chain the attestation lives on.
+ */
+async function checkDomainBinding(authority, attestationTimestamp, chainId) {
+  if (!pageHostname) return;
+
+  domainSection.hidden = false;
+  domainResult.hidden  = true;
+  domainStatus.hidden  = false;
+
+  try {
+    const client = buildClientForChain(chainId);
+    const bindings = await ens.getBindingsByAddress(client, authority);
+    const candidates = domainBindingCandidates(pageHostname);
+
+    // Match by ENS-binding name === one of the domain candidates.
+    const matching = bindings.filter(b =>
+      candidates.includes((b.name || '').toLowerCase())
+    );
+
+    if (matching.length === 0) {
+      renderDomainResult('not-found', 'No matching domain binding',
+        [
+          `Page hostname: ${pageHostname}`,
+          `Authority ${authority} has no ENS binding registered for this domain.`,
+        ]);
+      return;
+    }
+
+    const activeAtPublish = matching.filter(b => b.isActiveAt(attestationTimestamp));
+
+    if (activeAtPublish.length === 0) {
+      const b = matching[0];
+      const lines = [
+        `Page hostname: ${pageHostname}`,
+        `Authority ${authority} has a binding for "${b.name}", but it was not active when the article was published (${prettifyTimestamp(attestationTimestamp)}).`,
+        `Binding start: ${prettifyTimestamp(b.startTimestamp)}`,
+      ];
+      if (b.endTimestamp !== 0) {
+        lines.push(`Binding end: ${prettifyTimestamp(b.endTimestamp)}`);
+      }
+      renderDomainResult('unverified', 'Domain binding inactive at publish time', lines);
+      return;
+    }
+
+    const b = activeAtPublish[0];
+    renderDomainResult('verified', 'Domain binding verified', [
+      `"${b.name}" was bound to ${authority} at the time of publication (${prettifyTimestamp(attestationTimestamp)}).`,
+      `Binding start: ${prettifyTimestamp(b.startTimestamp)}`,
+      b.endTimestamp !== 0
+        ? `Binding end: ${prettifyTimestamp(b.endTimestamp)}`
+        : 'Binding still active.',
+    ]);
+  } catch (err) {
+    console.error('[Indelible] Domain binding check failed:', err);
+    renderDomainResult('error', 'Error', [err.message]);
+  } finally {
+    domainStatus.hidden = true;
+  }
+}
+
+/**
+ * Pick the attestation to use for the domain-binding check from a verification
+ * result. Prefers the latest attestation by the authority claimed in the page
+ * metadata; otherwise falls back to the most recent attestation.
+ *
+ * @param {object} verification
+ * @param {`0x${string}`|null} preferredAuthority
+ * @returns {{ authority: `0x${string}`, timestamp: number } | null}
+ */
+function pickAttestationForDomainCheck(verification, preferredAuthority) {
+  const atts = verification?.attestations;
+  if (!Array.isArray(atts) || atts.length === 0) return null;
+
+  let chosen = null;
+  if (preferredAuthority) {
+    const lower = preferredAuthority.toLowerCase();
+    chosen = [...atts].reverse().find(a => a.authority?.toLowerCase() === lower) ?? null;
+  }
+  if (!chosen) chosen = atts[atts.length - 1];
+
+  if (!chosen?.authority || chosen.timestamp == null) return null;
+  return { authority: chosen.authority, timestamp: Number(chosen.timestamp) };
+}
 
 /** Update the CID field whenever the article text changes. */
 articleInput.addEventListener('input', async () => {
@@ -201,6 +349,13 @@ articleForm.addEventListener('submit', async (event) => {
     }
 
     verifyResult.hidden = false;
+
+    // Check whether the page's domain was bound to the attesting authority
+    // at the time the article was published.
+    const picked = pickAttestationForDomainCheck(verification, authority);
+    if (picked && pageHostname) {
+      checkDomainBinding(picked.authority, picked.timestamp, pageChainId);
+    }
   } catch (err) {
     verifyResult.className    = 'result-box result-not-found';
     verifyHeading.textContent = 'Error';
@@ -405,6 +560,9 @@ function renderQuotes(quotes) {
   try {
     const [tab] = await browserAPI.tabs.query({ active: true, currentWindow: true });
     activeTab = tab ?? null;
+    if (activeTab?.url) {
+      try { pageHostname = new URL(activeTab.url).hostname || null; } catch (_) {}
+    }
     if (activeTab?.id) {
       pageData = await browserAPI.tabs.sendMessage(activeTab.id, { type: 'GET_INDELIBLE_DATA' });
     }
@@ -464,6 +622,15 @@ function renderQuotes(quotes) {
           }
 
           verifyResult.hidden = false;
+
+          // Run the domain-binding check using the cached verification.
+          const picked = pickAttestationForDomainCheck(
+            cached.verification,
+            pageData?.attestation?.authority ?? null,
+          );
+          if (picked && pageHostname) {
+            checkDomainBinding(picked.authority, picked.timestamp, pageChainId);
+          }
         } else if (cached?.verifying) {
           // Auto-verification is still in progress — show the spinner.
           verifyStatus.hidden = false;
