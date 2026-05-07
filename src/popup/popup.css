@@ -453,6 +453,13 @@ form {
   word-break: break-all;
 }
 
+.quote-ens-names {
+  font-size: 11px;
+  color: var(--ink-subtle);
+  font-style: italic;
+  margin: 2px 0 0;
+}
+
 /* ── Quote text mismatch comparison ─────────────────────────────────────────── */
 
 .quote-mismatch {

@@ -432,7 +432,11 @@ function buildQuoteCard(quote, index) {
   downloadBtn.textContent = 'Download Attestation Reference';
   downloadBtn.hidden      = true;
 
-  resultBox.append(resultHeading, quoteText, resultDetails, downloadBtn);
+  const ensNamesEl = document.createElement('p');
+  ensNamesEl.className = 'quote-ens-names';
+  ensNamesEl.hidden    = true;
+
+  resultBox.append(resultHeading, quoteText, resultDetails, ensNamesEl, downloadBtn);
   card.appendChild(resultBox);
 
   // Mismatch comparison box (initially hidden)
@@ -511,6 +515,22 @@ function buildQuoteCard(quote, index) {
           attestationIndex: Number(refAtt.index),
         };
         downloadBtn.hidden = false;
+      }
+
+      // Show ENS names bound to the attesting authority.
+      ensNamesEl.hidden = true;
+      if (allProofsValid) {
+        const authority = refAtt?.authority ?? quote.proofData.authority;
+        if (authority) {
+          try {
+            const bindings = await ens.getBindingsByAddress(quoteClient, authority);
+            const names = [...new Set(bindings.map(b => b.name).filter(Boolean))].slice(0, 3);
+            if (names.length > 0) {
+              ensNamesEl.textContent = `ENS: ${names.join(', ')}`;
+              ensNamesEl.hidden = false;
+            }
+          } catch (_) {}
+        }
       }
 
       resultBox.hidden = false;
