@@ -401,10 +401,12 @@ function renderQuotes(quotes) {
 
   // Query the active tab's content script for Indelible data.
   let pageData = null;
+  let activeTab = null;
   try {
     const [tab] = await browserAPI.tabs.query({ active: true, currentWindow: true });
-    if (tab?.id) {
-      pageData = await browserAPI.tabs.sendMessage(tab.id, { type: 'GET_INDELIBLE_DATA' });
+    activeTab = tab ?? null;
+    if (activeTab?.id) {
+      pageData = await browserAPI.tabs.sendMessage(activeTab.id, { type: 'GET_INDELIBLE_DATA' });
     }
   } catch (_) {
     // Content script not available on this page (e.g. chrome:// URLs).
@@ -437,6 +439,39 @@ function renderQuotes(quotes) {
 
     // Populate the Quotes tab.
     renderQuotes(pageData.quotes);
+
+    // ── Load cached auto-verification result from background ──────────────
+    if (activeTab?.id) {
+      try {
+        const cached = await browserAPI.runtime.sendMessage({
+          type: 'GET_VERIFICATION_RESULT',
+          tabId: activeTab.id,
+        });
+
+        if (cached?.verification) {
+          renderResult(verifyResult, verifyHeading, verifyDetails, cached.verification);
+
+          // Restore the download button if the cached result has a ref attestation.
+          const refAtt = cached.verification.attestations?.[cached.verification.attestations.length - 1];
+          if (refAtt?.index != null) {
+            downloadVerifyRefData = {
+              ipfsCid:          refAtt.cid,
+              chainId:          pageChainId ?? (CHAINS[chainSelect.value] ?? CHAINS.sepolia).id,
+              authority:        refAtt.authority,
+              attestationIndex: Number(refAtt.index),
+            };
+            downloadVerifyRefBtn.hidden = false;
+          }
+
+          verifyResult.hidden = false;
+        } else if (cached?.verifying) {
+          // Auto-verification is still in progress — show the spinner.
+          verifyStatus.hidden = false;
+        }
+      } catch (_) {
+        // Background not reachable (e.g. service worker restarted).
+      }
+    }
   } else {
     // ── No Indelible content ──────────────────────────────────────────────
     pageStatus.textContent = 'No Indelible content detected on this page. Enter details manually.';

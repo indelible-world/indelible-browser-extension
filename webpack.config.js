@@ -41,7 +41,7 @@ module.exports = [
     ...sharedPolyfills,
   },
 
-  // Background service worker — minimal, no npm dependencies
+  // Background service worker — uses indelible for auto-verification
   {
     name: 'background',
     target: 'webworker',
@@ -50,7 +50,7 @@ module.exports = [
       path: path.resolve(__dirname, 'dist'),
       filename: 'background.js',
     },
-    experiments: { topLevelAwait: true },
+    ...sharedPolyfills,
   },
 
   // Content script — runs in the page context, DOM-only, no npm dependencies

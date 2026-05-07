@@ -1,23 +1,50 @@
 /**
  * background.js — Indelible Verifier service worker
  *
- * Tracks which tabs contain Indelible-marked pages and manages the
+ * Tracks which tabs contain Indelible-marked pages, automatically verifies
+ * each detected attestation against the blockchain, and manages the
  * extension action badge accordingly.
  */
 
+import {
+  createRawCIDv1,
+  verifyCid,
+  createIndelibleClient,
+  getChainKeyById,
+  RESULT_CODE,
+} from 'indelible';
+
 const browserAPI = globalThis.browser ?? globalThis.chrome;
+
+const DEFAULT_CHAIN = 'sepolia';
 
 // ── State ────────────────────────────────────────────────────────────────────
 
-/** @type {Map<number, object>} tabId → extracted Indelible data */
+/** @type {Map<number, object>} tabId → { data, verification? } */
 const tabState = new Map();
 
 // ── Badge helpers ─────────────────────────────────────────────────────────────
 
-function setBadge(tabId, hasIndelible) {
-  if (hasIndelible) {
-    browserAPI.action.setBadgeText({ tabId, text: 'I' });
-    browserAPI.action.setBadgeBackgroundColor({ tabId, color: '#2563eb' });
+/**
+ * Set the extension badge for a tab.
+ *
+ * @param {number} tabId
+ * @param {'detected'|'verified'|'notFound'|'warning'|'revoked'|'error'|null} state
+ */
+function setBadge(tabId, state) {
+  const BADGE_CONFIGS = {
+    detected: { text: 'I', color: '#2563eb' },  // blue  — Indelible detected, verifying
+    verified: { text: '✓', color: '#16a34a' },  // green — on-chain attestation found & valid
+    notFound: { text: '?', color: '#6b7280' },  // grey  — no on-chain record found
+    warning:  { text: '!', color: '#d97706' },  // amber — warning (e.g. multiple results)
+    revoked:  { text: '✗', color: '#dc2626' },  // red   — attestation revoked
+    error:    { text: '!', color: '#dc2626' },  // red   — verification error
+  };
+
+  const cfg = BADGE_CONFIGS[state];
+  if (cfg) {
+    browserAPI.action.setBadgeText({ tabId, text: cfg.text });
+    browserAPI.action.setBadgeBackgroundColor({ tabId, color: cfg.color });
     if (browserAPI.action.setBadgeTextColor) {
       browserAPI.action.setBadgeTextColor({ tabId, color: '#ffffff' });
     }
@@ -26,12 +53,89 @@ function setBadge(tabId, hasIndelible) {
   }
 }
 
+// ── Auto-verification ─────────────────────────────────────────────────────────
+
+/**
+ * Verify the Indelible attestation for a tab and update its badge.
+ *
+ * @param {number} tabId
+ * @param {object} data  Extracted page data from the content script.
+ */
+async function autoVerify(tabId, data) {
+  if (!data.text) return; // Nothing to hash — keep the 'detected' badge.
+
+  const entry = tabState.get(tabId);
+  if (entry) entry.verifying = true;
+
+  try {
+    const { customRpcUrls = {} } = await browserAPI.storage.sync.get({ customRpcUrls: {} });
+
+    const chainId  = data.attestation?.chainId ?? null;
+    const chainKey = (chainId != null && getChainKeyById(chainId)) || DEFAULT_CHAIN;
+    const client   = createIndelibleClient(chainKey, customRpcUrls[chainKey]);
+
+    const cid       = await createRawCIDv1(data.text);
+    const authority = data.attestation?.authority ?? null;
+
+    const verification = await verifyCid(client, cid, authority);
+
+    // Persist the verification result so the popup can read it.
+    // Serialise computed getters explicitly — they are lost when the object
+    // crosses the message-passing boundary to the popup.
+    const entry = tabState.get(tabId);
+    if (entry) {
+      entry.verifying = false;
+      entry.verification = {
+        resultCode:        verification.resultCode,
+        headline:          verification.headline,
+        details:           verification.details,
+        attestations:      verification.attestations,
+        primaryResultCode: verification.primaryResultCode,
+        cssClass:          verification.cssClass,
+      };
+    }
+
+    switch (verification.primaryResultCode) {
+      case RESULT_CODE.VERIFIED:
+        setBadge(tabId, 'verified');
+        break;
+      case RESULT_CODE.REVOKED:
+        setBadge(tabId, 'revoked');
+        break;
+      case RESULT_CODE.UNVERIFIED:
+      case RESULT_CODE.WARNING:
+        setBadge(tabId, 'warning');
+        break;
+      case RESULT_CODE.NOT_FOUND:
+      default:
+        setBadge(tabId, 'notFound');
+    }
+  } catch (err) {
+    console.error('[Indelible] Auto-verification failed:', err);
+    const entry = tabState.get(tabId);
+    if (entry) entry.verifying = false;
+    setBadge(tabId, 'error');
+  }
+}
+
 // ── Message handling ──────────────────────────────────────────────────────────
 
-browserAPI.runtime.onMessage.addListener((msg, sender) => {
+browserAPI.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'INDELIBLE_DETECTED' && sender.tab) {
-    tabState.set(sender.tab.id, msg.data);
-    setBadge(sender.tab.id, true);
+    const tabId = sender.tab.id;
+    tabState.set(tabId, { data: msg.data, verifying: false, verification: null });
+    setBadge(tabId, 'detected');
+    autoVerify(tabId, msg.data);
+    return;
+  }
+
+  if (msg.type === 'GET_VERIFICATION_RESULT') {
+    const entry = tabState.get(msg.tabId);
+    sendResponse(entry
+      ? { verification: entry.verification ?? null, verifying: entry.verifying ?? false }
+      : null
+    );
+    return true;
   }
 });
 
