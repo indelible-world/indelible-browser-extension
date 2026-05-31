@@ -63,6 +63,10 @@ const domainHeading        = document.getElementById('domainHeading');
 const domainDetails        = document.getElementById('domainDetails');
 const domainStatus         = document.getElementById('domainStatus');
 
+// Highlight / coverage
+const highlightToggleBtn    = document.getElementById('highlightToggleBtn');
+const partialCoverageBanner = document.getElementById('partialCoverageBanner');
+
 // ── Viem client ──────────────────────────────────────────────────────────────
 
 /** Per-chain custom RPC URLs keyed by chain name. Loaded from storage. */
@@ -158,6 +162,10 @@ let pageChainId = null;
 let downloadVerifyRefData = null;
 /** Hostname of the active tab (e.g. "www.nytimes.com"). */
 let pageHostname = null;
+/** ID of the active tab — used by the highlight toggle after init completes. */
+let activeTabId = null;
+/** Whether the attested-text highlight is currently active on the page. */
+let highlightActive = false;
 
 /**
  * Render a result line into the domain section.
@@ -568,6 +576,28 @@ function renderQuotes(quotes) {
   });
 }
 
+// ── Highlight toggle ─────────────────────────────────────────────────────────
+
+highlightToggleBtn.addEventListener('click', async () => {
+  if (!activeTabId) return;
+  if (!highlightActive) {
+    try {
+      const resp = await browserAPI.tabs.sendMessage(activeTabId, { type: 'HIGHLIGHT_INDELIBLE' });
+      highlightActive = true;
+      const n = resp?.count ?? 0;
+      highlightToggleBtn.textContent = `Remove highlight (${n} element${n === 1 ? '' : 's'})`;
+      highlightToggleBtn.classList.add('btn-highlight--active');
+    } catch (_) {}
+  } else {
+    try {
+      await browserAPI.tabs.sendMessage(activeTabId, { type: 'UNHIGHLIGHT_INDELIBLE' });
+    } catch (_) {}
+    highlightActive = false;
+    highlightToggleBtn.textContent = 'Highlight attested text';
+    highlightToggleBtn.classList.remove('btn-highlight--active');
+  }
+});
+
 // ── Initialisation ────────────────────────────────────────────────────────────
 
 (async function init() {
@@ -580,6 +610,7 @@ function renderQuotes(quotes) {
   try {
     const [tab] = await browserAPI.tabs.query({ active: true, currentWindow: true });
     activeTab = tab ?? null;
+    activeTabId = activeTab?.id ?? null;
     if (activeTab?.url) {
       try { pageHostname = new URL(activeTab.url).hostname || null; } catch (_) {}
     }
@@ -617,6 +648,17 @@ function renderQuotes(quotes) {
 
     // Populate the Quotes tab.
     renderQuotes(pageData.quotes);
+
+    // Show the highlight toggle button.
+    highlightToggleBtn.hidden = false;
+
+    // Show a partial-coverage banner when the attested text covers less than
+    // 60% of the page, so the user knows to use Highlight to see what's missing.
+    if (pageData.fullPageLength > 0 && pageData.text) {
+      if (pageData.text.length / pageData.fullPageLength < 0.6) {
+        partialCoverageBanner.hidden = false;
+      }
+    }
 
     // ── Load cached auto-verification result from background ──────────────
     if (activeTab?.id) {
