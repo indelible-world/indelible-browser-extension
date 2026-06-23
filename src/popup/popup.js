@@ -22,6 +22,7 @@ import {
   createIndelibleClient,
   getChainKeyById,
   prettifyTimestamp,
+  getCIDFromRawDigest,
   ens,
 } from 'indelible';
 
@@ -51,6 +52,9 @@ const verifyResult         = document.getElementById('verifyResult');
 const verifyHeading        = document.getElementById('verifyHeading');
 const verifyDetails        = document.getElementById('verifyDetails');
 const downloadVerifyRefBtn = document.getElementById('downloadVerifyRefButton');
+const childCidSection      = document.getElementById('childCidSection');
+const childCidValue        = document.getElementById('childCidValue');
+const childCidVerifyLink   = document.getElementById('childCidVerifyLink');
 
 // Quotes tab
 const noQuotesMsg          = document.getElementById('noQuotesMsg');
@@ -150,6 +154,32 @@ function renderResult(box, heading, details, verification, valid = true) {
     li.textContent = line;
     details.appendChild(li);
   }
+}
+
+// ── childIpfsHash helpers ─────────────────────────────────────────────────────
+
+/**
+ * Returns true if the given bytes32 hex value is non-zero.
+ *
+ * @param {string|null|undefined} hex  e.g. "0x1234…"
+ */
+function isNonZeroBytes32(hex) {
+  return typeof hex === 'string' && /^0x[0-9a-fA-F]{64}$/.test(hex) && !/^0x0{64}$/.test(hex);
+}
+
+/**
+ * Convert a bytes32 hex string (as stored on-chain) to a CIDv1 string.
+ *
+ * @param {string} bytes32Hex  e.g. "0xabc…" (66 chars)
+ * @returns {string}  base32lower CIDv1
+ */
+function bytes32ToCid(bytes32Hex) {
+  const hex = bytes32Hex.replace(/^0x/, '');
+  const digest = new Uint8Array(32);
+  for (let i = 0; i < 32; i++) {
+    digest[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  }
+  return getCIDFromRawDigest(digest);
 }
 
 // ── Article tab logic ────────────────────────────────────────────────────────
@@ -331,6 +361,7 @@ articleForm.addEventListener('submit', async (event) => {
   verifyStatus.hidden  = false;
   verifyButton.disabled = true;
   downloadVerifyRefBtn.hidden = true;
+  childCidSection.hidden = true;
 
   try {
     const verification = await verifyCid(buildClientForChain(pageChainId), cid, authority);
@@ -346,6 +377,14 @@ articleForm.addEventListener('submit', async (event) => {
         attestationIndex:  Number(refAtt.index),
       };
       downloadVerifyRefBtn.hidden = false;
+    }
+
+    // Show childIpfsHash (if present and non-zero) with a link to verify it.
+    if (isNonZeroBytes32(refAtt?.childIpfsHash)) {
+      const childCid = bytes32ToCid(refAtt.childIpfsHash);
+      childCidValue.textContent = childCid;
+      childCidVerifyLink.dataset.cid = childCid;
+      childCidSection.hidden = false;
     }
 
     verifyResult.hidden = false;
@@ -370,6 +409,21 @@ articleForm.addEventListener('submit', async (event) => {
 
 downloadVerifyRefBtn.addEventListener('click', () => {
   if (downloadVerifyRefData) downloadJson(downloadVerifyRefData, 'attestation-reference.json');
+});
+
+childCidVerifyLink.addEventListener('click', (event) => {
+  event.preventDefault();
+  const cid = childCidVerifyLink.dataset.cid;
+  if (!cid) return;
+  // Switch to the article tab and pre-fill the CID field.
+  tabBtns.forEach(btn => btn.classList.toggle('active', btn.dataset.tab === 'article'));
+  tabArticle.hidden = false;
+  tabQuotes.hidden  = true;
+  articleInput.value   = '';
+  articleInput.readOnly = false;
+  cidField.value       = cid;
+  cidField.readOnly    = false;
+  cidField.focus();
 });
 
 // ── Quotes tab logic ─────────────────────────────────────────────────────────
@@ -436,7 +490,35 @@ function buildQuoteCard(quote, index) {
   ensNamesEl.className = 'quote-ens-names';
   ensNamesEl.hidden    = true;
 
-  resultBox.append(resultHeading, quoteText, resultDetails, ensNamesEl, downloadBtn);
+  const quoteChildCidSection = document.createElement('div');
+  quoteChildCidSection.className = 'child-cid-section';
+  quoteChildCidSection.hidden    = true;
+  const quoteChildCidLabel = document.createElement('span');
+  quoteChildCidLabel.className   = 'child-cid-label';
+  quoteChildCidLabel.textContent = 'Child content CID:';
+  const quoteChildCidValue = document.createElement('code');
+  quoteChildCidValue.className = 'child-cid-value';
+  const quoteChildCidLink  = document.createElement('a');
+  quoteChildCidLink.className = 'child-cid-verify-link';
+  quoteChildCidLink.href      = '#';
+  quoteChildCidLink.textContent = 'Verify child CID';
+  quoteChildCidSection.append(quoteChildCidLabel, quoteChildCidValue, quoteChildCidLink);
+
+  quoteChildCidLink.addEventListener('click', (event) => {
+    event.preventDefault();
+    const cid = quoteChildCidLink.dataset.cid;
+    if (!cid) return;
+    tabBtns.forEach(btn => btn.classList.toggle('active', btn.dataset.tab === 'article'));
+    tabArticle.hidden = false;
+    tabQuotes.hidden  = true;
+    articleInput.value    = '';
+    articleInput.readOnly = false;
+    cidField.value        = cid;
+    cidField.readOnly     = false;
+    cidField.focus();
+  });
+
+  resultBox.append(resultHeading, quoteText, resultDetails, ensNamesEl, quoteChildCidSection, downloadBtn);
   card.appendChild(resultBox);
 
   // Mismatch comparison box (initially hidden)
@@ -531,6 +613,15 @@ function buildQuoteCard(quote, index) {
             }
           } catch (_) {}
         }
+      }
+
+      // Show childIpfsHash (if present and non-zero) with a link to verify it.
+      quoteChildCidSection.hidden = true;
+      if (isNonZeroBytes32(refAtt?.childIpfsHash)) {
+        const childCid = bytes32ToCid(refAtt.childIpfsHash);
+        quoteChildCidValue.textContent = childCid;
+        quoteChildCidLink.dataset.cid  = childCid;
+        quoteChildCidSection.hidden    = false;
       }
 
       resultBox.hidden = false;

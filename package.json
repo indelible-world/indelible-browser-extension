@@ -8,7 +8,7 @@
     "dev": "webpack --mode development --watch"
   },
   "dependencies": {
-    "indelible": "^0.2.4",
+    "indelible": "^0.3.0",
     "viem": "^2.0.0"
   },
   "devDependencies": {
