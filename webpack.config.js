@@ -15,6 +15,7 @@ const sharedPolyfills = {
       fs: false,
       net: false,
       tls: false,
+      'node:worker_threads': false,
     },
   },
   plugins: [
@@ -26,6 +27,15 @@ const sharedPolyfills = {
   experiments: {
     topLevelAwait: true,
   },
+  // Suppress the intentional dynamic import in ox/viem's tempo chain (dead code in browser)
+  ignoreWarnings: [
+    {
+      module: /ox\/_esm\/tempo\/internal\/virtualMasterPool\.js/,
+      message: /Critical dependency/,
+    },
+  ],
+  // Extension bundles are installed locally — web performance size limits don't apply
+  performance: { hints: false },
 };
 
 module.exports = [
@@ -63,5 +73,7 @@ module.exports = [
       filename: 'content.js',
     },
     experiments: { topLevelAwait: true },
+    ignoreWarnings: sharedPolyfills.ignoreWarnings,
+    performance: { hints: false },
   },
 ];

@@ -589,3 +589,41 @@ a.authority-link:hover { text-decoration: underline; }
   line-height: 1.5;
 }
 .partial-coverage-banner[hidden] { display: none; }
+
+/* ── Child CID section ───────────────────────────────────────────────────── */
+
+.child-cid-section {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+.child-cid-section[hidden] { display: none; }
+
+.child-cid-label {
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+
+.child-cid-value {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  word-break: break-all;
+  color: var(--color-text);
+  flex: 1 1 100%;
+}
+
+.child-cid-verify-link {
+  font-size: 12px;
+  color: var(--accent);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.child-cid-verify-link:hover {
+  color: var(--accent-hover);
+  text-decoration: underline;
+}
