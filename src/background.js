@@ -9,6 +9,7 @@
 import {
   createRawCIDv1,
   verifyCid,
+  verifyQuoteProof,
   createIndelibleClient,
   getChainKeyById,
   RESULT_CODE,
@@ -118,23 +119,100 @@ async function autoVerify(tabId, data) {
   }
 }
 
+/**
+ * Auto-verify every embedded quote for a tab, store the per-quote results,
+ * and push them to the content script so it can render inline check/✗ badges.
+ *
+ * @param {number} tabId
+ * @param {object} data  Extracted page data from the content script.
+ */
+async function autoVerifyQuotes(tabId, data) {
+  const quotes = Array.isArray(data.quotes) ? data.quotes : [];
+  if (quotes.length === 0) return;
+
+  const { customRpcUrls = {} } = await browserAPI.storage.sync.get({ customRpcUrls: {} });
+
+  const results = await Promise.all(quotes.map(async (quote, index) => {
+    try {
+      const chainId  = quote.proofData?.chainId ?? null;
+      const chainKey = (chainId != null && getChainKeyById(chainId)) || DEFAULT_CHAIN;
+      const client   = createIndelibleClient(chainKey, customRpcUrls[chainKey]);
+
+      const { verification, quoteText, allProofsValid } =
+        await verifyQuoteProof(client, quote.proofData);
+
+      // A quote is considered "verified" when its Merkle proofs are valid, the
+      // source attestation is VERIFIED (not revoked/unverified), and the page
+      // text matches the text committed in the proof.
+      const isVerified =
+        allProofsValid &&
+        verification.primaryResultCode === RESULT_CODE.VERIFIED &&
+        Boolean(quoteText) &&
+        quoteText.includes(quote.text);
+
+      return { index, verified: isVerified };
+    } catch (err) {
+      console.error('[Indelible] Quote auto-verification failed:', err);
+      return { index, verified: false };
+    }
+  }));
+
+  const entry = tabState.get(tabId);
+  if (entry) entry.quoteResults = results;
+
+  // Push the results to the content script so it can render inline badges.
+  try {
+    await browserAPI.tabs.sendMessage(tabId, { type: 'QUOTE_RESULTS', results });
+  } catch (_) {
+    // Content script may not be reachable — badges will simply not appear.
+  }
+}
+
 // ── Message handling ──────────────────────────────────────────────────────────
 
 browserAPI.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'INDELIBLE_DETECTED' && sender.tab) {
     const tabId = sender.tab.id;
-    tabState.set(tabId, { data: msg.data, verifying: false, verification: null });
+    tabState.set(tabId, {
+      data: msg.data,
+      verifying: false,
+      verification: null,
+      quoteResults: null,
+      focusedQuoteIndex: null,
+    });
     setBadge(tabId, 'detected');
     autoVerify(tabId, msg.data);
+    autoVerifyQuotes(tabId, msg.data);
+    return;
+  }
+
+  if (msg.type === 'OPEN_QUOTE_DETAILS' && sender.tab) {
+    // A user clicked an inline quote badge on the page. Remember which quote
+    // to focus, then open the extension popup.
+    const tabId = sender.tab.id;
+    const entry = tabState.get(tabId);
+    if (entry) entry.focusedQuoteIndex = msg.quoteIndex ?? null;
+    if (browserAPI.action.openPopup) {
+      browserAPI.action.openPopup().catch(() => {});
+    }
     return;
   }
 
   if (msg.type === 'GET_VERIFICATION_RESULT') {
     const entry = tabState.get(msg.tabId);
-    sendResponse(entry
-      ? { verification: entry.verification ?? null, verifying: entry.verifying ?? false }
-      : null
-    );
+    if (entry) {
+      const focusedQuoteIndex = entry.focusedQuoteIndex;
+      // Consume the focus request so it only applies to this popup opening.
+      entry.focusedQuoteIndex = null;
+      sendResponse({
+        verification: entry.verification ?? null,
+        verifying: entry.verifying ?? false,
+        quoteResults: entry.quoteResults ?? null,
+        focusedQuoteIndex: focusedQuoteIndex ?? null,
+      });
+    } else {
+      sendResponse(null);
+    }
     return true;
   }
 });

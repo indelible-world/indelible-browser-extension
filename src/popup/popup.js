@@ -34,6 +34,7 @@ const settingsToggle       = document.getElementById('settingsToggle');
 const settingsPanel        = document.getElementById('settingsPanel');
 const chainSelect          = document.getElementById('chainSelect');
 const rpcInput             = document.getElementById('rpcInput');
+const showBadgesToggle     = document.getElementById('showBadgesToggle');
 
 const tabBtns              = document.querySelectorAll('.tab-btn');
 const tabArticle           = document.getElementById('tab-article');
@@ -94,10 +95,11 @@ function buildClientForChain(chainId) {
 // ── Settings ──────────────────────────────────────────────────────────────────
 
 async function loadSettings() {
-  const saved = await browserAPI.storage.sync.get({ customRpcUrls: {} });
+  const saved = await browserAPI.storage.sync.get({ customRpcUrls: {}, showQuoteBadges: true });
   customRpcUrls = saved.customRpcUrls;
   // Show the stored custom RPC URL for the currently selected chain.
   rpcInput.value = customRpcUrls[chainSelect.value] || '';
+  showBadgesToggle.checked = saved.showQuoteBadges;
 }
 
 async function saveSettings() {
@@ -107,6 +109,20 @@ async function saveSettings() {
 
 settingsToggle.addEventListener('click', () => {
   settingsPanel.hidden = !settingsPanel.hidden;
+});
+
+// Toggle inline on-page quote badges. Persist the choice and tell the active
+// tab's content script to add or remove the badges immediately.
+showBadgesToggle.addEventListener('change', async () => {
+  const enabled = showBadgesToggle.checked;
+  await browserAPI.storage.sync.set({ showQuoteBadges: enabled });
+  if (activeTabId) {
+    try {
+      await browserAPI.tabs.sendMessage(activeTabId, { type: 'SET_QUOTE_BADGES', enabled });
+    } catch (_) {
+      // Content script may not be reachable — nothing to update.
+    }
+  }
 });
 
 // When the chain selector changes, show the stored custom RPC for that chain.
@@ -446,6 +462,9 @@ childCidVerifyLink.addEventListener('click', (event) => {
 function buildQuoteCard(quote, index) {
   const card = document.createElement('div');
   card.className = 'quote-card';
+  // 0-based index matching the document order used by extractPageData(),
+  // so inline page badges can request focus on a specific quote card.
+  card.dataset.quoteIndex = String(index - 1);
 
   // Header row: preview text + verify button
   const header = document.createElement('div');
@@ -667,6 +686,30 @@ function renderQuotes(quotes) {
   });
 }
 
+/**
+ * Switch to the Quotes tab, scroll the matching quote card into view, and
+ * trigger its verification. Used when the popup is opened via an inline
+ * page badge click.
+ *
+ * @param {number} quoteIndex  0-based index of the quote to focus.
+ */
+function focusQuoteCard(quoteIndex) {
+  // Activate the Quotes tab.
+  tabBtns.forEach(btn => btn.classList.toggle('active', btn.dataset.tab === 'quotes'));
+  tabArticle.hidden = true;
+  tabQuotes.hidden  = false;
+
+  const card = quotesContainer.querySelector(`.quote-card[data-quote-index="${quoteIndex}"]`);
+  if (!card) return;
+
+  card.scrollIntoView({ block: 'center' });
+  card.classList.add('quote-card--focused');
+
+  // Kick off verification for this quote so its details are shown.
+  const verifyBtn = card.querySelector('.btn-verify-quote');
+  if (verifyBtn && !verifyBtn.disabled) verifyBtn.click();
+}
+
 // ── Highlight toggle ─────────────────────────────────────────────────────────
 
 highlightToggleBtn.addEventListener('click', async () => {
@@ -758,6 +801,12 @@ highlightToggleBtn.addEventListener('click', async () => {
           type: 'GET_VERIFICATION_RESULT',
           tabId: activeTab.id,
         });
+
+        // If the popup was opened by clicking an inline quote badge, jump to
+        // the Quotes tab and auto-verify that specific quote card.
+        if (cached?.focusedQuoteIndex != null) {
+          focusQuoteCard(cached.focusedQuoteIndex);
+        }
 
         if (cached?.verification) {
           renderResult(verifyResult, verifyHeading, verifyDetails, cached.verification);

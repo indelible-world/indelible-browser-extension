@@ -120,6 +120,18 @@ body {
   gap: 8px;
 }
 
+.settings-row--toggle {
+  justify-content: space-between;
+}
+
+.settings-checkbox {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  margin: 0;
+}
+
 .settings-label {
   font-size: 12px;
   font-weight: 500;
@@ -424,6 +436,11 @@ form {
   gap: 8px;
   background: var(--surface);
   box-shadow: var(--shadow-sm);
+}
+
+.quote-card--focused {
+  border-color: var(--accent, #3730a3);
+  box-shadow: 0 0 0 2px rgba(55, 48, 163, 0.25);
 }
 
 .quote-card-header {
