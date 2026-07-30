@@ -8,8 +8,7 @@
   "host_permissions": ["<all_urls>"],
 
   "background": {
-    "service_worker": "dist/background.js",
-    "scripts": ["dist/background.js"]
+    "service_worker": "dist/background.js"
   },
 
   "icons": {
@@ -36,12 +35,5 @@
       "js": ["dist/content.js"],
       "run_at": "document_idle"
     }
-  ],
-
-  "browser_specific_settings": {
-    "gecko": {
-      "id": "verifier@indelible.world",
-      "strict_min_version": "121.0"
-    }
-  }
+  ]
 }

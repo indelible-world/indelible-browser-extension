@@ -1,11 +1,14 @@
 {
   "name": "indelible-browser-extension",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Chrome extension for verifying Indelible-attested articles and quotes",
   "private": true,
   "scripts": {
-    "build": "webpack --mode production",
-    "dev": "webpack --mode development --watch"
+    "build": "webpack --mode production && node scripts/build-manifests.js",
+    "dev": "webpack --mode development --watch",
+    "manifests": "node scripts/build-manifests.js",
+    "stage:chrome": "node scripts/stage.js chrome",
+    "stage:firefox": "node scripts/stage.js firefox"
   },
   "dependencies": {
     "indelible": "^0.3.3",
