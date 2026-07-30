@@ -1,0 +1,48 @@
+name: Build & Release
+
+on:
+  push:
+    branches: ['main']
+
+  workflow_dispatch:
+
+concurrency:
+  group: 'publish'
+  cancel-in-progress: true
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # required to create releases
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - name: Read version
+        id: version
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Zip extension
+        run: |
+          mkdir -p release/indelible-browser-extension
+          cp -r dist release/indelible-browser-extension/dist
+          cp -r icons release/indelible-browser-extension/icons
+          cp manifest.json popup.html release/indelible-browser-extension/
+          cd release/indelible-browser-extension
+          zip -r ../../indelible-browser-extension-v${{ steps.version.outputs.version }}.zip .
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: v${{ steps.version.outputs.version }}
+          files: indelible-browser-extension-v${{ steps.version.outputs.version }}.zip
+          generate_release_notes: true
