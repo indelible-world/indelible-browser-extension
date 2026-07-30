@@ -1,5 +1,6 @@
 const path = require('path');
 const webpack = require('webpack');
+const MiniCssExtractPlugin = require('mini-css-extract-plugin');
 
 const sharedPolyfills = {
   resolve: {
@@ -47,8 +48,25 @@ module.exports = [
     output: {
       path: path.resolve(__dirname, 'dist'),
       filename: 'popup.js',
+      assetModuleFilename: 'fonts/[name][ext]',
     },
     ...sharedPolyfills,
+    module: {
+      rules: [
+        {
+          test: /\.css$/i,
+          use: [MiniCssExtractPlugin.loader, 'css-loader'],
+        },
+        {
+          test: /\.(woff2?|ttf|eot)$/i,
+          type: 'asset/resource',
+        },
+      ],
+    },
+    plugins: [
+      ...sharedPolyfills.plugins,
+      new MiniCssExtractPlugin({ filename: 'popup.css' }),
+    ],
   },
 
   // Background service worker — uses indelible for auto-verification

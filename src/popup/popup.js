@@ -12,6 +12,8 @@
  *     against the blockchain using indelible-protocol.
  */
 
+import './popup.css';
+
 import {
   createRawCIDv1,
   downloadJson,
