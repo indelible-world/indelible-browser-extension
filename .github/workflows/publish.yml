@@ -26,10 +26,6 @@ jobs:
 
       - run: npm run build
 
-      - name: Read version
-        id: version
-        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
-
       - name: Zip extension
         run: |
           mkdir -p release/indelible-browser-extension
@@ -37,12 +33,18 @@ jobs:
           cp -r icons release/indelible-browser-extension/icons
           cp manifest.json popup.html release/indelible-browser-extension/
           cd release/indelible-browser-extension
-          zip -r ../../indelible-browser-extension-v${{ steps.version.outputs.version }}.zip .
+          zip -r ../../indelible-browser-extension-latest.zip .
+
+      - name: Move latest tag
+        run: |
+          git tag -f latest
+          git push origin -f latest
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: v${{ steps.version.outputs.version }}
-          name: v${{ steps.version.outputs.version }}
-          files: indelible-browser-extension-v${{ steps.version.outputs.version }}.zip
-          generate_release_notes: true
+          tag_name: latest
+          name: Latest build
+          files: indelible-browser-extension-latest.zip
+          generate_release_notes: false
+          make_latest: true
