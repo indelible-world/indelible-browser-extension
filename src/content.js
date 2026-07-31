@@ -29,6 +29,9 @@ function injectBadgeStyles() {
   if (document.getElementById(BADGE_STYLE_ID)) return;
   const styleEl = document.createElement('style');
   styleEl.id = BADGE_STYLE_ID;
+  // The glyph is drawn with ::before so it never appears in textContent —
+  // extractPageData() reads textContent to build the attested text and quote
+  // text, and a real text node here would corrupt both.
   styleEl.textContent =
     `.${BADGE_CLASS}{display:inline-flex;align-items:center;justify-content:center;` +
     `width:1em;height:1em;margin-left:.25em;border-radius:50%;vertical-align:middle;` +
@@ -37,7 +40,9 @@ function injectBadgeStyles() {
     `box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform .1s ease;}` +
     `.${BADGE_CLASS}:hover{transform:scale(1.15);}` +
     `.${BADGE_CLASS}--verified{background:#16a34a;}` +
-    `.${BADGE_CLASS}--unverified{background:#dc2626;}`;
+    `.${BADGE_CLASS}--verified::before{content:'\\2713';}` +
+    `.${BADGE_CLASS}--unverified{background:#dc2626;}` +
+    `.${BADGE_CLASS}--unverified::before{content:'\\2715';}`;
   document.head.appendChild(styleEl);
 }
 
@@ -92,7 +97,6 @@ function renderQuoteBadges(results) {
 
     const badge = document.createElement('span');
     badge.className = `${BADGE_CLASS} ${verified ? `${BADGE_CLASS}--verified` : `${BADGE_CLASS}--unverified`}`;
-    badge.textContent = verified ? '✓' : '✕';
     badge.dataset.indelibleQuoteIndex = String(index);
     badge.title = verified
       ? 'Indelible: quote verified — click for details'
