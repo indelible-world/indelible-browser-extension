@@ -24,6 +24,13 @@ const DEFAULT_CHAIN = 'sepolia';
 /** @type {Map<number, object>} tabId → { data, verification? } */
 const tabState = new Map();
 
+// Pending "focus this quote when the popup opens" requests. Kept in extension
+// storage so they survive service-worker termination; session storage is used
+// when available so the request never outlives the browser session.
+const focusStore = browserAPI.storage.session ?? browserAPI.storage.local;
+
+const focusKey = (tabId) => `focusedQuote:${tabId}`;
+
 // ── Badge helpers ─────────────────────────────────────────────────────────────
 
 /**
@@ -178,7 +185,6 @@ browserAPI.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       verifying: false,
       verification: null,
       quoteResults: null,
-      focusedQuoteIndex: null,
     });
     setBadge(tabId, 'detected');
     autoVerify(tabId, msg.data);
@@ -187,28 +193,25 @@ browserAPI.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.type === 'OPEN_QUOTE_DETAILS' && sender.tab) {
-    // A user clicked an inline quote badge on the page. Remember which quote
-    // to focus, then open the extension popup.
+    // A user clicked an inline quote badge on the page. Persist which quote to
+    // focus, then open the popup. The request goes to session storage rather
+    // than tabState because the service worker may have been terminated since
+    // the page loaded, leaving tabState empty.
     const tabId = sender.tab.id;
-    const entry = tabState.get(tabId);
-    if (entry) entry.focusedQuoteIndex = msg.quoteIndex ?? null;
-    if (browserAPI.action.openPopup) {
-      browserAPI.action.openPopup().catch(() => {});
-    }
+    focusStore.set({ [focusKey(tabId)]: msg.quoteIndex ?? null }).catch(() => {});
+    // Called synchronously in the same turn as the write so the user gesture
+    // that Firefox requires for openPopup() is still active.
+    browserAPI.action.openPopup?.()?.catch?.(() => {});
     return;
   }
 
   if (msg.type === 'GET_VERIFICATION_RESULT') {
     const entry = tabState.get(msg.tabId);
     if (entry) {
-      const focusedQuoteIndex = entry.focusedQuoteIndex;
-      // Consume the focus request so it only applies to this popup opening.
-      entry.focusedQuoteIndex = null;
       sendResponse({
         verification: entry.verification ?? null,
         verifying: entry.verifying ?? false,
         quoteResults: entry.quoteResults ?? null,
-        focusedQuoteIndex: focusedQuoteIndex ?? null,
       });
     } else {
       sendResponse(null);
@@ -223,10 +226,12 @@ browserAPI.tabs.onUpdated.addListener((tabId, changeInfo) => {
   // Clear state when a tab starts navigating to a new page.
   if (changeInfo.status === 'loading') {
     tabState.delete(tabId);
+    focusStore.remove(focusKey(tabId)).catch(() => {});
     setBadge(tabId, false);
   }
 });
 
 browserAPI.tabs.onRemoved.addListener((tabId) => {
   tabState.delete(tabId);
+  focusStore.remove(focusKey(tabId)).catch(() => {});
 });

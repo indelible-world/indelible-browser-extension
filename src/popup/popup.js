@@ -689,6 +689,28 @@ function renderQuotes(quotes) {
 }
 
 /**
+ * Read and clear the pending "focus this quote" request written by the
+ * background worker when an inline page badge was clicked.
+ *
+ * @param {number|null|undefined} tabId
+ * @returns {Promise<number|null>} 0-based quote index, or null if none pending.
+ */
+async function consumeFocusedQuoteIndex(tabId) {
+  if (tabId == null) return null;
+  const store = browserAPI.storage.session ?? browserAPI.storage.local;
+  const key   = `focusedQuote:${tabId}`;
+  try {
+    const stored = await store.get(key);
+    const index  = stored?.[key];
+    if (index == null) return null;
+    await store.remove(key);
+    return index;
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
  * Switch to the Quotes tab, scroll the matching quote card into view, and
  * trigger its verification. Used when the popup is opened via an inline
  * page badge click.
@@ -785,6 +807,11 @@ highlightToggleBtn.addEventListener('click', async () => {
     // Populate the Quotes tab.
     renderQuotes(pageData.quotes);
 
+    // If the popup was opened by clicking an inline quote badge, jump to the
+    // Quotes tab and auto-verify that specific quote card.
+    const focusedQuoteIndex = await consumeFocusedQuoteIndex(activeTab?.id);
+    if (focusedQuoteIndex != null) focusQuoteCard(focusedQuoteIndex);
+
     // Show the highlight toggle button.
     highlightToggleBtn.hidden = false;
 
@@ -803,12 +830,6 @@ highlightToggleBtn.addEventListener('click', async () => {
           type: 'GET_VERIFICATION_RESULT',
           tabId: activeTab.id,
         });
-
-        // If the popup was opened by clicking an inline quote badge, jump to
-        // the Quotes tab and auto-verify that specific quote card.
-        if (cached?.focusedQuoteIndex != null) {
-          focusQuoteCard(cached.focusedQuoteIndex);
-        }
 
         if (cached?.verification) {
           renderResult(verifyResult, verifyHeading, verifyDetails, cached.verification);
