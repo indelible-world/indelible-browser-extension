@@ -64,6 +64,22 @@ function setBadge(tabId, state) {
 // ── Auto-verification ─────────────────────────────────────────────────────────
 
 /**
+ * Deep-copy a value, converting BigInt to Number. Extension message passing
+ * uses JSON serialisation, which throws on BigInt ("Could not serialize
+ * message"); on-chain values such as attestation timestamps are BigInt.
+ */
+function toSerializable(value) {
+  if (typeof value === 'bigint') return Number(value);
+  if (Array.isArray(value)) return value.map(toSerializable);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([k, v]) => [k, toSerializable(v)]),
+    );
+  }
+  return value;
+}
+
+/**
  * Verify the Indelible attestation for a tab and update its badge.
  *
  * @param {number} tabId
@@ -97,7 +113,7 @@ async function autoVerify(tabId, data) {
         resultCode:        verification.resultCode,
         headline:          verification.headline,
         details:           verification.details,
-        attestations:      verification.attestations,
+        attestations:      toSerializable(verification.attestations),
         primaryResultCode: verification.primaryResultCode,
         cssClass:          verification.cssClass,
       };
