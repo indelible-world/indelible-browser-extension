@@ -17,7 +17,7 @@ import {
 
 const browserAPI = globalThis.browser ?? globalThis.chrome;
 
-const DEFAULT_CHAIN = 'sepolia';
+const DEFAULT_CHAIN = 'arbitrum';
 
 // ── State ────────────────────────────────────────────────────────────────────
 

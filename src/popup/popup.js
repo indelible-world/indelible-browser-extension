@@ -398,7 +398,7 @@ articleForm.addEventListener('submit', async (event) => {
     if (refAtt?.index != null) {
       downloadVerifyRefData = {
         ipfsCid:           refAtt.cid,
-        chainId:           pageChainId ?? (CHAINS[chainSelect.value] ?? CHAINS.sepolia).id,
+        chainId:           pageChainId ?? (CHAINS[chainSelect.value] ?? CHAINS.arbitrum).id,
         authority:         refAtt.authority,
         attestationIndex:  Number(refAtt.index),
       };
@@ -621,7 +621,7 @@ function buildQuoteCard(quote, index) {
       if (allProofsValid && refAtt?.index != null) {
         refData = {
           ipfsCid:          refAtt.cid,
-          chainId:          quote.proofData.chainId ?? (CHAINS[chainSelect.value] ?? CHAINS.sepolia).id,
+          chainId:          quote.proofData.chainId ?? (CHAINS[chainSelect.value] ?? CHAINS.arbitrum).id,
           authority:        refAtt.authority,
           attestationIndex: Number(refAtt.index),
         };
@@ -839,7 +839,7 @@ highlightToggleBtn.addEventListener('click', async () => {
           if (refAtt?.index != null) {
             downloadVerifyRefData = {
               ipfsCid:          refAtt.cid,
-              chainId:          pageChainId ?? (CHAINS[chainSelect.value] ?? CHAINS.sepolia).id,
+              chainId:          pageChainId ?? (CHAINS[chainSelect.value] ?? CHAINS.arbitrum).id,
               authority:        refAtt.authority,
               attestationIndex: Number(refAtt.index),
             };
