@@ -178,6 +178,18 @@ function renderResult(box, heading, details, verification, valid = true) {
   }
 }
 
+/**
+ * Build a single <li> carrying an error message, for a .result-details list.
+ *
+ * @param {Error} err
+ * @returns {HTMLLIElement}
+ */
+function errorDetailItem(err) {
+  const li = document.createElement('li');
+  li.textContent = err.message;
+  return li;
+}
+
 // ── childIpfsHash helpers ─────────────────────────────────────────────────────
 
 /**
@@ -424,7 +436,7 @@ articleForm.addEventListener('submit', async (event) => {
   } catch (err) {
     verifyResult.className    = 'result-box result-not-found';
     verifyHeading.textContent = 'Error';
-    verifyDetails.innerHTML   = `<li>${err.message}</li>`;
+    verifyDetails.replaceChildren(errorDetailItem(err));
     verifyResult.hidden       = false;
     console.error(err);
   } finally {
@@ -657,7 +669,7 @@ function buildQuoteCard(quote, index) {
     } catch (err) {
       resultBox.className    = 'result-box result-not-found';
       resultHeading.textContent = 'Error';
-      resultDetails.innerHTML   = `<li>${err.message}</li>`;
+      resultDetails.replaceChildren(errorDetailItem(err));
       resultBox.hidden          = false;
       console.error(err);
     } finally {

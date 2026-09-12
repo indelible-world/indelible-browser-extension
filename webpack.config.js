@@ -49,6 +49,9 @@ module.exports = [
       path: path.resolve(__dirname, 'dist'),
       filename: 'popup.js',
       assetModuleFilename: 'fonts/[name][ext]',
+      // Keeps webpack's runtime from emitting a `new Function('return this')`
+      // globalThis fallback, which add-on reviewers flag as eval.
+      environment: { globalThis: true },
     },
     ...sharedPolyfills,
     module: {
@@ -77,6 +80,7 @@ module.exports = [
     output: {
       path: path.resolve(__dirname, 'dist'),
       filename: 'background.js',
+      environment: { globalThis: true },
     },
     ...sharedPolyfills,
   },
@@ -89,6 +93,7 @@ module.exports = [
     output: {
       path: path.resolve(__dirname, 'dist'),
       filename: 'content.js',
+      environment: { globalThis: true },
     },
     experiments: { topLevelAwait: true },
     ignoreWarnings: sharedPolyfills.ignoreWarnings,
