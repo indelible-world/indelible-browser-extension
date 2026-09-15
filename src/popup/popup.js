@@ -43,6 +43,7 @@ const tabArticle           = document.getElementById('tab-article');
 const tabQuotes            = document.getElementById('tab-quotes');
 
 const pageStatus           = document.getElementById('pageStatus');
+const sepoliaWarning       = document.getElementById('sepoliaWarning');
 
 // Article tab
 const articleForm          = document.getElementById('articleForm');
@@ -802,6 +803,8 @@ highlightToggleBtn.addEventListener('click', async () => {
     pageStatus.textContent = `✓ Indelible content detected${chainLabel}`;
     pageStatus.className   = 'page-status detected';
     pageStatus.hidden      = false;
+    const isIndelibleWorld = pageHostname === 'indelible.world' || pageHostname?.endsWith('.indelible.world');
+    sepoliaWarning.hidden  = pageChainId !== CHAINS.sepolia.id || isIndelibleWorld;
 
     // Populate article text and compute CID.
     if (pageData.text) {
@@ -881,6 +884,7 @@ highlightToggleBtn.addEventListener('click', async () => {
     pageStatus.textContent = 'No Indelible content detected on this page. Enter details manually.';
     pageStatus.className   = 'page-status not-detected';
     pageStatus.hidden      = false;
+    sepoliaWarning.hidden  = true;
 
     noQuotesMsg.hidden = false;
   }

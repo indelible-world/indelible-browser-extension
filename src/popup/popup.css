@@ -226,6 +226,21 @@ body {
   color: var(--success);
 }
 
+/* ── Sepolia testnet warning ───────────────────────────────────────────────── */
+
+.sepolia-warning {
+  padding: 8px 14px;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  background: #b91c1c;
+  color: #fff;
+  border-bottom: 1px solid var(--border);
+}
+.sepolia-warning[hidden] { display: none; }
+
 /* ── Tab panels ────────────────────────────────────────────────────────────── */
 
 .tab-panel {
