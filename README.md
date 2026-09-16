@@ -28,7 +28,8 @@ indelible-browser-extension/
 ├── icons/                   Extension icons (icon.svg + rendered PNGs)
 ├── scripts/
 │   ├── build-manifests.js   Derives manifest.firefox.json from manifest.json
-│   └── stage.js             Assembles build/<target>/ as a loadable extension
+│   ├── stage.js             Assembles build/<target>/ as a loadable extension
+│   └── zip.js               Zips build/<target>/ contents into build/<target>.zip
 ├── src/
 │   ├── content.js           Content script — extracts Indelible data from the live DOM
 │   ├── background.js        Service worker — badge state + auto-verification per tab
@@ -44,7 +45,8 @@ indelible-browser-extension/
 │   └── fonts/
 └── build/                   Staged unpacked extensions (generated; not committed)
     ├── chrome/
-    └── firefox/
+    ├── firefox/
+    └── firefox.zip
 ```
 
 ---
@@ -75,9 +77,14 @@ npm run dev            # development build with file watching
 # 4. Stage a loadable extension folder
 npm run stage:chrome   # → build/chrome/
 npm run stage:firefox  # → build/firefox/
+
+# 5. (optional) Package the Firefox build for submission
+npm run zip:firefox    # → build/firefox.zip
 ```
 
 The webpack bundles are written to `dist/`; the staged, loadable extensions are written to `build/<target>/`.
+
+`npm run zip:firefox` zips the contents of `build/firefox/` directly (no wrapping folder) into `build/firefox.zip`, e.g. for submission to addons.mozilla.org. Run `npm run stage:firefox` first.
 
 ### You must load `build/{browser}/` as the unpacked extension to use it, not `dist/`, `src/`, or `/`
 
