@@ -2,3 +2,4 @@ node_modules/
 dist/
 build/
 manifest.firefox.json
+chrome.pem
