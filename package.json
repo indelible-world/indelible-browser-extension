@@ -16,7 +16,7 @@
     "@fontsource/fraunces": "^5.3.0",
     "@fontsource/inter": "^5.3.0",
     "@fontsource/jetbrains-mono": "^5.3.0",
-    "indelible": "^0.3.3",
+    "indelible": "^0.3.8",
     "viem": "^2.0.0"
   },
   "devDependencies": {
