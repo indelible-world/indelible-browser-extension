@@ -1,9 +1,10 @@
 /**
  * background.js — Indelible Verifier service worker
  *
- * Tracks which tabs contain Indelible-marked pages, automatically verifies
- * each detected attestation against the blockchain, and manages the
- * extension action badge accordingly.
+ * Tracks which tabs (and which frames within them, including nested iframes)
+ * contain Indelible-marked content, automatically verifies each detected
+ * attestation and quote against the blockchain, and manages the extension
+ * action badge accordingly.
  */
 
 import {
@@ -19,10 +20,42 @@ const browserAPI = globalThis.browser ?? globalThis.chrome;
 
 const DEFAULT_CHAIN = 'arbitrum';
 
+/** How long GET_TAB_STATE waits for frames to re-report after a worker restart. */
+const RESEND_WAIT_MS = 400;
+
 // ── State ────────────────────────────────────────────────────────────────────
 
-/** @type {Map<number, object>} tabId → { data, verification? } */
+/**
+ * @typedef {object} FrameEntry
+ * @property {number} frameId
+ * @property {string|null} docToken   Identifies the reporting document, so a late
+ *   "gone" message from a previous document in the same frame is ignored.
+ * @property {string|null} url        URL of the frame's document.
+ * @property {string} signature       JSON of `data`, used to skip redundant reports.
+ * @property {object} data            Extracted page data from the content script.
+ * @property {boolean} verifying
+ * @property {object|null} verification
+ * @property {boolean} verifyError
+ * @property {{ index: number, verified: boolean }[]|null} quoteResults
+ */
+
+/** @type {Map<number, Map<number, FrameEntry>>} tabId → frameId → entry */
 const tabState = new Map();
+
+/** @returns {Map<number, FrameEntry>} */
+function framesFor(tabId) {
+  let frames = tabState.get(tabId);
+  if (!frames) {
+    frames = new Map();
+    tabState.set(tabId, frames);
+  }
+  return frames;
+}
+
+/** Whether `entry` is still the current entry for its frame (not superseded). */
+function isCurrent(tabId, entry) {
+  return tabState.get(tabId)?.get(entry.frameId) === entry;
+}
 
 // Pending "focus this quote when the popup opens" requests. Kept in extension
 // storage so they survive service-worker termination; session storage is used
@@ -61,6 +94,47 @@ function setBadge(tabId, state) {
   }
 }
 
+// Worst state first: a single failing frame dominates the tab badge, and a
+// tab only shows "verified" once every frame has finished and verified.
+const BADGE_PRIORITY = ['revoked', 'error', 'warning', 'notFound', 'detected', 'verified'];
+
+/**
+ * Badge state contributed by a single frame. Frames with an attested article
+ * are judged on the article; quote-only frames are judged on their quotes.
+ *
+ * @param {FrameEntry} entry
+ * @returns {string}
+ */
+function frameBadgeState(entry) {
+  if (entry.data.text) {
+    if (entry.verifyError) return 'error';
+    if (!entry.verification) return 'detected';
+    switch (entry.verification.primaryResultCode) {
+      case RESULT_CODE.VERIFIED:   return 'verified';
+      case RESULT_CODE.REVOKED:    return 'revoked';
+      case RESULT_CODE.UNVERIFIED:
+      case RESULT_CODE.WARNING:    return 'warning';
+      default:                     return 'notFound';
+    }
+  }
+  if (!entry.quoteResults) return 'detected';
+  return entry.quoteResults.every(r => r.verified) ? 'verified' : 'warning';
+}
+
+/** Recompute and apply the action badge for a tab from all of its frames. */
+function updateTabBadge(tabId) {
+  const frames = tabState.get(tabId);
+  if (!frames || frames.size === 0) {
+    setBadge(tabId, null);
+    return;
+  }
+  let worst = BADGE_PRIORITY.length - 1;
+  for (const entry of frames.values()) {
+    worst = Math.min(worst, BADGE_PRIORITY.indexOf(frameBadgeState(entry)));
+  }
+  setBadge(tabId, BADGE_PRIORITY[worst]);
+}
+
 // ── Auto-verification ─────────────────────────────────────────────────────────
 
 /**
@@ -80,16 +154,16 @@ function toSerializable(value) {
 }
 
 /**
- * Verify the Indelible attestation for a tab and update its badge.
+ * Verify the Indelible article attestation reported by one frame.
  *
  * @param {number} tabId
- * @param {object} data  Extracted page data from the content script.
+ * @param {FrameEntry} entry
  */
-async function autoVerify(tabId, data) {
-  if (!data.text) return; // Nothing to hash — keep the 'detected' badge.
+async function autoVerify(tabId, entry) {
+  const { data } = entry;
+  if (!data.text) return; // Nothing to hash — quote-only frame.
 
-  const entry = tabState.get(tabId);
-  if (entry) entry.verifying = true;
+  entry.verifying = true;
 
   try {
     const { customRpcUrls = {} } = await browserAPI.storage.sync.get({ customRpcUrls: {} });
@@ -106,51 +180,33 @@ async function autoVerify(tabId, data) {
     // Persist the verification result so the popup can read it.
     // Serialise computed getters explicitly — they are lost when the object
     // crosses the message-passing boundary to the popup.
-    const entry = tabState.get(tabId);
-    if (entry) {
-      entry.verifying = false;
-      entry.verification = {
-        resultCode:        verification.resultCode,
-        headline:          verification.headline,
-        details:           verification.details,
-        attestations:      toSerializable(verification.attestations),
-        primaryResultCode: verification.primaryResultCode,
-        cssClass:          verification.cssClass,
-      };
-    }
-
-    switch (verification.primaryResultCode) {
-      case RESULT_CODE.VERIFIED:
-        setBadge(tabId, 'verified');
-        break;
-      case RESULT_CODE.REVOKED:
-        setBadge(tabId, 'revoked');
-        break;
-      case RESULT_CODE.UNVERIFIED:
-      case RESULT_CODE.WARNING:
-        setBadge(tabId, 'warning');
-        break;
-      case RESULT_CODE.NOT_FOUND:
-      default:
-        setBadge(tabId, 'notFound');
-    }
+    entry.verification = {
+      resultCode:        verification.resultCode,
+      headline:          verification.headline,
+      details:           verification.details,
+      attestations:      toSerializable(verification.attestations),
+      primaryResultCode: verification.primaryResultCode,
+      cssClass:          verification.cssClass,
+    };
   } catch (err) {
     console.error('[Indelible] Auto-verification failed:', err);
-    const entry = tabState.get(tabId);
-    if (entry) entry.verifying = false;
-    setBadge(tabId, 'error');
+    entry.verifyError = true;
+  } finally {
+    entry.verifying = false;
   }
+
+  if (isCurrent(tabId, entry)) updateTabBadge(tabId);
 }
 
 /**
- * Auto-verify every embedded quote for a tab, store the per-quote results,
- * and push them to the content script so it can render inline check/✗ badges.
+ * Auto-verify every embedded quote reported by one frame, store the per-quote
+ * results, and push them back to that frame so it can render inline badges.
  *
  * @param {number} tabId
- * @param {object} data  Extracted page data from the content script.
+ * @param {FrameEntry} entry
  */
-async function autoVerifyQuotes(tabId, data) {
-  const quotes = Array.isArray(data.quotes) ? data.quotes : [];
+async function autoVerifyQuotes(tabId, entry) {
+  const quotes = Array.isArray(entry.data.quotes) ? entry.data.quotes : [];
   if (quotes.length === 0) return;
 
   const { customRpcUrls = {} } = await browserAPI.storage.sync.get({ customRpcUrls: {} });
@@ -180,31 +236,103 @@ async function autoVerifyQuotes(tabId, data) {
     }
   }));
 
-  const entry = tabState.get(tabId);
-  if (entry) entry.quoteResults = results;
+  entry.quoteResults = results;
+  if (!isCurrent(tabId, entry)) return;
+  updateTabBadge(tabId);
 
-  // Push the results to the content script so it can render inline badges.
+  // Push the results to the reporting frame so it can render inline badges.
   try {
-    await browserAPI.tabs.sendMessage(tabId, { type: 'QUOTE_RESULTS', results });
+    await browserAPI.tabs.sendMessage(
+      tabId,
+      { type: 'QUOTE_RESULTS', results },
+      { frameId: entry.frameId },
+    );
   } catch (_) {
     // Content script may not be reachable — badges will simply not appear.
   }
 }
 
+/**
+ * Ask every frame in a tab to report its Indelible data again. Used when the
+ * service worker has lost its in-memory state (it is terminated when idle).
+ */
+async function requestResend(tabId) {
+  try {
+    await browserAPI.tabs.sendMessage(tabId, { type: 'RESEND_INDELIBLE' });
+  } catch (_) {
+    // No content script in this tab.
+  }
+}
+
+/** Serialisable snapshot of a tab's frames for the popup, top frame first. */
+function tabSnapshot(tabId) {
+  const frames = [...(tabState.get(tabId)?.values() ?? [])]
+    .sort((a, b) => a.frameId - b.frameId)
+    .map(entry => ({
+      frameId:      entry.frameId,
+      url:          entry.url,
+      data:         entry.data,
+      verifying:    entry.verifying,
+      verification: entry.verification,
+      quoteResults: entry.quoteResults,
+    }));
+  return { frames };
+}
+
 // ── Message handling ──────────────────────────────────────────────────────────
 
 browserAPI.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (msg.type === 'INDELIBLE_DETECTED' && sender.tab) {
-    const tabId = sender.tab.id;
-    tabState.set(tabId, {
-      data: msg.data,
-      verifying: false,
+  if (msg.type === 'INDELIBLE_FRAME_DATA' && sender.tab) {
+    // A frame (top-level page or any nested iframe) reported Indelible content.
+    const tabId     = sender.tab.id;
+    const frameId   = sender.frameId ?? 0;
+    const frames    = framesFor(tabId);
+    // fullPageLength tracks unrelated page churn, so it doesn't count as a change.
+    const { fullPageLength: _ignored, ...content } = msg.data ?? {};
+    const signature = JSON.stringify(content);
+
+    const existing = frames.get(frameId);
+    if (existing && existing.signature === signature) {
+      // Unchanged (e.g. a resend) — just refresh the document identity and
+      // re-deliver any quote results so the frame can redraw its badges.
+      existing.docToken = msg.docToken ?? existing.docToken;
+      existing.data     = msg.data;
+      if (existing.quoteResults) {
+        browserAPI.tabs
+          .sendMessage(tabId, { type: 'QUOTE_RESULTS', results: existing.quoteResults }, { frameId })
+          .catch(() => {});
+      }
+      return;
+    }
+
+    /** @type {FrameEntry} */
+    const entry = {
+      frameId,
+      docToken:     msg.docToken ?? null,
+      url:          sender.url ?? null,
+      signature,
+      data:         msg.data,
+      verifying:    false,
       verification: null,
+      verifyError:  false,
       quoteResults: null,
-    });
-    setBadge(tabId, 'detected');
-    autoVerify(tabId, msg.data);
-    autoVerifyQuotes(tabId, msg.data);
+    };
+    frames.set(frameId, entry);
+    updateTabBadge(tabId);
+    autoVerify(tabId, entry);
+    autoVerifyQuotes(tabId, entry);
+    return;
+  }
+
+  if (msg.type === 'INDELIBLE_FRAME_GONE' && sender.tab) {
+    const tabId   = sender.tab.id;
+    const frameId = sender.frameId ?? 0;
+    const frames  = tabState.get(tabId);
+    const entry   = frames?.get(frameId);
+    if (entry && (!msg.docToken || !entry.docToken || msg.docToken === entry.docToken)) {
+      frames.delete(frameId);
+      updateTabBadge(tabId);
+    }
     return;
   }
 
@@ -214,24 +342,25 @@ browserAPI.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // than tabState because the service worker may have been terminated since
     // the page loaded, leaving tabState empty.
     const tabId = sender.tab.id;
-    focusStore.set({ [focusKey(tabId)]: msg.quoteIndex ?? null }).catch(() => {});
+    focusStore.set({
+      [focusKey(tabId)]: { frameId: sender.frameId ?? 0, quoteIndex: msg.quoteIndex ?? null },
+    }).catch(() => {});
     // Called synchronously in the same turn as the write so the user gesture
     // that Firefox requires for openPopup() is still active.
     browserAPI.action.openPopup?.()?.catch?.(() => {});
     return;
   }
 
-  if (msg.type === 'GET_VERIFICATION_RESULT') {
-    const entry = tabState.get(msg.tabId);
-    if (entry) {
-      sendResponse({
-        verification: entry.verification ?? null,
-        verifying: entry.verifying ?? false,
-        quoteResults: entry.quoteResults ?? null,
-      });
-    } else {
-      sendResponse(null);
+  if (msg.type === 'GET_TAB_STATE') {
+    const tabId = msg.tabId;
+    if (tabState.get(tabId)?.size) {
+      sendResponse(tabSnapshot(tabId));
+      return;
     }
+    // No state — likely a restarted service worker. Ask the frames to report
+    // again and give them a moment before answering.
+    requestResend(tabId);
+    setTimeout(() => sendResponse(tabSnapshot(tabId)), RESEND_WAIT_MS);
     return true;
   }
 });
@@ -243,7 +372,11 @@ browserAPI.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.status === 'loading') {
     tabState.delete(tabId);
     focusStore.remove(focusKey(tabId)).catch(() => {});
-    setBadge(tabId, false);
+    setBadge(tabId, null);
+  } else if (changeInfo.status === 'complete') {
+    // 'loading' also fires for some same-document (SPA) navigations, which
+    // clear state while the frames stay alive; have them report again.
+    requestResend(tabId);
   }
 });
 

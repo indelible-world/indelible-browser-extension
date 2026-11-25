@@ -9,7 +9,7 @@ A Manifest V3 browser extension (Chrome and Firefox) that detects and verifies [
 - **Auto-detection** — scans every page for `data-indelible` markup and badges the toolbar icon when found
 - **Auto-verification** — the background worker verifies detected attestations on-chain and reflects the outcome in the badge (verified, not found, revoked, warning, error)
 - **Article verification** — extracts the full attested article text, computes its IPFS CID, and verifies it against the blockchain
-- **Quote verification** — finds every embedded `data-indelible-quote` proof on the page and lets you verify each one individually
+- **Quote verification** — finds every embedded `data-indelible-quote` proof on the page and lets you verify each one individually. Pages that embed quotes without a `data-indelible` root (e.g. a standalone page of quotes) are also detected and their quotes auto-verified
 - **Manual mode** — works on any page; paste in text or a CID manually if the page has no Indelible markup
 - **Chain & RPC settings** — supports Ethereum, Arbitrum, Base, and Sepolia; accepts a custom RPC URL per chain
 - **Download attestation reference** — exports a `attestation-reference.json` file after a successful verification

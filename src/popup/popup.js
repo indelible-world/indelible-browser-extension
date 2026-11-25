@@ -225,6 +225,8 @@ let downloadVerifyRefData = null;
 let pageHostname = null;
 /** ID of the active tab — used by the highlight toggle after init completes. */
 let activeTabId = null;
+/** Frame (0 = top-level page) holding the attested article, for the highlight toggle. */
+let articleFrameId = 0;
 /** Whether the attested-text highlight is currently active on the page. */
 let highlightActive = false;
 
@@ -477,9 +479,9 @@ childCidVerifyLink.addEventListener('click', (event) => {
 function buildQuoteCard(quote, index) {
   const card = document.createElement('div');
   card.className = 'quote-card';
-  // 0-based index matching the document order used by extractPageData(),
-  // so inline page badges can request focus on a specific quote card.
-  card.dataset.quoteIndex = String(index - 1);
+  // Frame + 0-based index within that frame's document order, matching the
+  // inline page badges so a badge click can focus this specific card.
+  card.dataset.quoteKey = quoteKey(quote.frameId ?? 0, quote.frameIndex ?? index - 1);
 
   // Header row: preview text + verify button
   const header = document.createElement('div');
@@ -508,6 +510,12 @@ function buildQuoteCard(quote, index) {
     const meta = document.createElement('p');
     meta.className   = 'quote-meta';
     meta.textContent = `Authority: ${quote.proofData.authority}`;
+    card.appendChild(meta);
+  }
+  if (quote.frameId) {
+    const meta = document.createElement('p');
+    meta.className   = 'quote-meta';
+    meta.textContent = `Found in embedded frame${quote.frameHost ? `: ${quote.frameHost}` : ''}`;
     card.appendChild(meta);
   }
 
@@ -701,23 +709,45 @@ function renderQuotes(quotes) {
   });
 }
 
+/** Key identifying a quote by its frame and 0-based index within that frame. */
+function quoteKey(frameId, frameIndex) {
+  return `${frameId}:${frameIndex}`;
+}
+
 /**
  * Read and clear the pending "focus this quote" request written by the
  * background worker when an inline page badge was clicked.
  *
  * @param {number|null|undefined} tabId
- * @returns {Promise<number|null>} 0-based quote index, or null if none pending.
+ * @returns {Promise<string|null>} quote key (see quoteKey), or null if none pending.
  */
-async function consumeFocusedQuoteIndex(tabId) {
+async function consumeFocusedQuoteKey(tabId) {
   if (tabId == null) return null;
   const store = browserAPI.storage.session ?? browserAPI.storage.local;
   const key   = `focusedQuote:${tabId}`;
   try {
-    const stored = await store.get(key);
-    const index  = stored?.[key];
-    if (index == null) return null;
+    const stored  = await store.get(key);
+    const request = stored?.[key];
+    if (request?.quoteIndex == null) return null;
     await store.remove(key);
-    return index;
+    return quoteKey(request.frameId ?? 0, request.quoteIndex);
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * Hostname for a frame URL. `blob:` URLs carry their creator's origin;
+ * `about:srcdoc`/`about:blank` and opaque origins have none.
+ *
+ * @param {string|null} url
+ * @returns {string|null}
+ */
+function frameHostname(url) {
+  if (!url) return null;
+  try {
+    const { origin } = new URL(url);
+    return origin && origin !== 'null' ? new URL(origin).hostname || null : null;
   } catch (_) {
     return null;
   }
@@ -728,15 +758,15 @@ async function consumeFocusedQuoteIndex(tabId) {
  * trigger its verification. Used when the popup is opened via an inline
  * page badge click.
  *
- * @param {number} quoteIndex  0-based index of the quote to focus.
+ * @param {string} key  Quote key (see quoteKey) of the card to focus.
  */
-function focusQuoteCard(quoteIndex) {
+function focusQuoteCard(key) {
   // Activate the Quotes tab.
   tabBtns.forEach(btn => btn.classList.toggle('active', btn.dataset.tab === 'quotes'));
   tabArticle.hidden = true;
   tabQuotes.hidden  = false;
 
-  const card = quotesContainer.querySelector(`.quote-card[data-quote-index="${quoteIndex}"]`);
+  const card = quotesContainer.querySelector(`.quote-card[data-quote-key="${key}"]`);
   if (!card) return;
 
   card.scrollIntoView({ block: 'center' });
@@ -753,7 +783,9 @@ highlightToggleBtn.addEventListener('click', async () => {
   if (!activeTabId) return;
   if (!highlightActive) {
     try {
-      const resp = await browserAPI.tabs.sendMessage(activeTabId, { type: 'HIGHLIGHT_INDELIBLE' });
+      const resp = await browserAPI.tabs.sendMessage(
+        activeTabId, { type: 'HIGHLIGHT_INDELIBLE' }, { frameId: articleFrameId },
+      );
       highlightActive = true;
       const n = resp?.count ?? 0;
       highlightToggleBtn.textContent = `Remove highlight (${n} element${n === 1 ? '' : 's'})`;
@@ -761,7 +793,9 @@ highlightToggleBtn.addEventListener('click', async () => {
     } catch (_) {}
   } else {
     try {
-      await browserAPI.tabs.sendMessage(activeTabId, { type: 'UNHIGHLIGHT_INDELIBLE' });
+      await browserAPI.tabs.sendMessage(
+        activeTabId, { type: 'UNHIGHLIGHT_INDELIBLE' }, { frameId: articleFrameId },
+      );
     } catch (_) {}
     highlightActive = false;
     highlightToggleBtn.textContent = 'Highlight attested text';
@@ -775,8 +809,9 @@ highlightToggleBtn.addEventListener('click', async () => {
   // Load persisted settings and build the viem client.
   await loadSettings();
 
-  // Query the active tab's content script for Indelible data.
-  let pageData = null;
+  // Ask the background worker for everything detected in the active tab —
+  // the top-level page and every (nested) iframe report to it separately.
+  let frames = [];
   let activeTab = null;
   try {
     const [tab] = await browserAPI.tabs.query({ active: true, currentWindow: true });
@@ -785,101 +820,15 @@ highlightToggleBtn.addEventListener('click', async () => {
     if (activeTab?.url) {
       try { pageHostname = new URL(activeTab.url).hostname || null; } catch (_) {}
     }
-    if (activeTab?.id) {
-      pageData = await browserAPI.tabs.sendMessage(activeTab.id, { type: 'GET_INDELIBLE_DATA' });
+    if (activeTab?.id != null) {
+      const state = await browserAPI.runtime.sendMessage({ type: 'GET_TAB_STATE', tabId: activeTab.id });
+      frames = Array.isArray(state?.frames) ? state.frames : [];
     }
   } catch (_) {
-    // Content script not available on this page (e.g. chrome:// URLs).
+    // Background or content script not available (e.g. chrome:// URLs).
   }
 
-  if (pageData) {
-    // ── Indelible content detected ────────────────────────────────────────
-
-    // Store the chain ID from the attestation — used for all verification on this page.
-    pageChainId = pageData.attestation?.chainId ?? null;
-    const chainLabel = pageChainId
-      ? ` · ${CHAIN_DISPLAY_NAMES[pageChainId] ?? `Chain ${pageChainId}`}`
-      : '';
-    pageStatus.textContent = `✓ Indelible content detected${chainLabel}`;
-    pageStatus.className   = 'page-status detected';
-    pageStatus.hidden      = false;
-    const isIndelibleWorld = pageHostname === 'indelible.world' || pageHostname?.endsWith('.indelible.world');
-    sepoliaWarning.hidden  = pageChainId !== CHAINS.sepolia.id || isIndelibleWorld;
-
-    // Populate article text and compute CID.
-    if (pageData.text) {
-      articleInput.value    = pageData.text;
-      articleInput.readOnly = true;
-      cidField.readOnly     = true;
-      cidField.value        = await createRawCIDv1(pageData.text);
-    }
-
-    // Pre-fill authority from attestation metadata if present.
-    if (pageData.attestation?.authority) {
-      authorityInput.value = pageData.attestation.authority;
-    }
-
-    // Populate the Quotes tab.
-    renderQuotes(pageData.quotes);
-
-    // If the popup was opened by clicking an inline quote badge, jump to the
-    // Quotes tab and auto-verify that specific quote card.
-    const focusedQuoteIndex = await consumeFocusedQuoteIndex(activeTab?.id);
-    if (focusedQuoteIndex != null) focusQuoteCard(focusedQuoteIndex);
-
-    // Show the highlight toggle button.
-    highlightToggleBtn.hidden = false;
-
-    // Show a partial-coverage banner when the attested text covers less than
-    // 60% of the page, so the user knows to use Highlight to see what's missing.
-    if (pageData.fullPageLength > 0 && pageData.text) {
-      if (pageData.text.length / pageData.fullPageLength < 0.6) {
-        partialCoverageBanner.hidden = false;
-      }
-    }
-
-    // ── Load cached auto-verification result from background ──────────────
-    if (activeTab?.id) {
-      try {
-        const cached = await browserAPI.runtime.sendMessage({
-          type: 'GET_VERIFICATION_RESULT',
-          tabId: activeTab.id,
-        });
-
-        if (cached?.verification) {
-          renderResult(verifyResult, verifyHeading, verifyDetails, cached.verification);
-
-          // Restore the download button if the cached result has a ref attestation.
-          const refAtt = cached.verification.attestations?.[cached.verification.attestations.length - 1];
-          if (refAtt?.index != null) {
-            downloadVerifyRefData = {
-              ipfsCid:          refAtt.cid,
-              chainId:          pageChainId ?? (CHAINS[chainSelect.value] ?? CHAINS.arbitrum).id,
-              authority:        refAtt.authority,
-              attestationIndex: Number(refAtt.index),
-            };
-            downloadVerifyRefBtn.hidden = false;
-          }
-
-          verifyResult.hidden = false;
-
-          // Run the domain-binding check using the cached verification.
-          const picked = pickAttestationForDomainCheck(
-            cached.verification,
-            pageData?.attestation?.authority ?? null,
-          );
-          if (picked && pageHostname) {
-            checkDomainBinding(picked.authority, picked.timestamp, pageChainId);
-          }
-        } else if (cached?.verifying) {
-          // Auto-verification is still in progress — show the spinner.
-          verifyStatus.hidden = false;
-        }
-      } catch (_) {
-        // Background not reachable (e.g. service worker restarted).
-      }
-    }
-  } else {
+  if (frames.length === 0) {
     // ── No Indelible content ──────────────────────────────────────────────
     pageStatus.textContent = 'No Indelible content detected on this page. Enter details manually.';
     pageStatus.className   = 'page-status not-detected';
@@ -887,5 +836,113 @@ highlightToggleBtn.addEventListener('click', async () => {
     sepoliaWarning.hidden  = true;
 
     noQuotesMsg.hidden = false;
+    return;
+  }
+
+  // ── Indelible content detected ──────────────────────────────────────────
+
+  // The Article tab shows one attested article: the top-level page's if it
+  // has one, otherwise the first embedded frame's (frames arrive top first).
+  const articleFrame = frames.find(f => f.data?.text) ?? null;
+  const pageData     = articleFrame?.data ?? null;
+  articleFrameId     = articleFrame?.frameId ?? 0;
+
+  // Quotes from every frame, in frame order then document order.
+  const quotes = frames.flatMap(f => (f.data?.quotes ?? []).map((quote, frameIndex) => ({
+    ...quote,
+    frameId:   f.frameId,
+    frameIndex,
+    frameHost: frameHostname(f.url),
+  })));
+
+  // An article inside an embedded frame is judged against that frame's own
+  // domain for the domain-binding check, not the outer page's.
+  if (articleFrame && articleFrame.frameId !== 0) {
+    pageHostname = frameHostname(articleFrame.url) ?? pageHostname;
+  }
+
+  // Store the chain ID from the attestation — used for all verification on this page.
+  pageChainId = pageData?.attestation?.chainId ?? null;
+  const chainLabel = pageChainId
+    ? ` · ${CHAIN_DISPLAY_NAMES[pageChainId] ?? `Chain ${pageChainId}`}`
+    : '';
+  const embedded = frames.some(f => f.frameId !== 0) ? ' (incl. embedded frames)' : '';
+  pageStatus.textContent = pageData
+    ? `✓ Indelible content detected${chainLabel}${embedded}`
+    : `✓ ${quotes.length} Indelible quote${quotes.length === 1 ? '' : 's'} detected${embedded}`;
+  pageStatus.className   = 'page-status detected';
+  pageStatus.hidden      = false;
+  const isIndelibleWorld = pageHostname === 'indelible.world' || pageHostname?.endsWith('.indelible.world');
+  sepoliaWarning.hidden  = pageChainId !== CHAINS.sepolia.id || isIndelibleWorld;
+
+  // Populate article text and compute CID.
+  if (pageData?.text) {
+    articleInput.value    = pageData.text;
+    articleInput.readOnly = true;
+    cidField.readOnly     = true;
+    cidField.value        = await createRawCIDv1(pageData.text);
+  }
+
+  // Pre-fill authority from attestation metadata if present.
+  if (pageData?.attestation?.authority) {
+    authorityInput.value = pageData.attestation.authority;
+  }
+
+  // Populate the Quotes tab.
+  renderQuotes(quotes);
+
+  // With no attested article anywhere, open on the Quotes tab.
+  if (!pageData) {
+    tabBtns.forEach(btn => btn.classList.toggle('active', btn.dataset.tab === 'quotes'));
+    tabArticle.hidden = true;
+    tabQuotes.hidden  = false;
+  }
+
+  // If the popup was opened by clicking an inline quote badge, jump to the
+  // Quotes tab and auto-verify that specific quote card.
+  const focusedKey = await consumeFocusedQuoteKey(activeTab?.id);
+  if (focusedKey != null) focusQuoteCard(focusedKey);
+
+  if (!pageData) return;
+
+  // Show the highlight toggle button.
+  highlightToggleBtn.hidden = false;
+
+  // Show a partial-coverage banner when the attested text covers less than
+  // 60% of its document, so the user knows to use Highlight to see what's missing.
+  if (pageData.fullPageLength > 0 && pageData.text.length / pageData.fullPageLength < 0.6) {
+    partialCoverageBanner.hidden = false;
+  }
+
+  // ── Show the background's auto-verification result ──────────────────────
+  if (articleFrame.verification) {
+    const verification = articleFrame.verification;
+    renderResult(verifyResult, verifyHeading, verifyDetails, verification);
+
+    // Restore the download button if the cached result has a ref attestation.
+    const refAtt = verification.attestations?.[verification.attestations.length - 1];
+    if (refAtt?.index != null) {
+      downloadVerifyRefData = {
+        ipfsCid:          refAtt.cid,
+        chainId:          pageChainId ?? (CHAINS[chainSelect.value] ?? CHAINS.arbitrum).id,
+        authority:        refAtt.authority,
+        attestationIndex: Number(refAtt.index),
+      };
+      downloadVerifyRefBtn.hidden = false;
+    }
+
+    verifyResult.hidden = false;
+
+    // Run the domain-binding check using the cached verification.
+    const picked = pickAttestationForDomainCheck(
+      verification,
+      pageData.attestation?.authority ?? null,
+    );
+    if (picked && pageHostname) {
+      checkDomainBinding(picked.authority, picked.timestamp, pageChainId);
+    }
+  } else if (articleFrame.verifying) {
+    // Auto-verification is still in progress — show the spinner.
+    verifyStatus.hidden = false;
   }
 })();

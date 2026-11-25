@@ -8,7 +8,7 @@
  * the browser extension messaging API.
  */
 
-import { extractPageData } from 'indelible';
+import { extractPageData, normalise } from 'indelible/utils';
 
 const browserAPI = globalThis.browser ?? globalThis.chrome;
 
@@ -125,13 +125,126 @@ function removeQuoteBadges() {
   document.querySelectorAll(`.${BADGE_CLASS}`).forEach(node => node.remove());
 }
 
+/**
+ * Extract Indelible data from the page. Falls back to a quote-only result when
+ * the page embeds `data-indelible-quote` proofs without a `data-indelible`
+ * root (e.g. a standalone page of quotes from other attested sources).
+ *
+ * @returns {{ attestation: object|null, text: string, quotes: Array, quoteOnly?: boolean } | null}
+ */
+function getPageData() {
+  const data = extractPageData();
+  if (data) return data;
+
+  const quotes = [];
+  for (const el of document.querySelectorAll('[data-indelible-quote]')) {
+    try {
+      quotes.push({
+        text: normalise(el.textContent),
+        proofData: JSON.parse(el.getAttribute('data-indelible-quote')),
+      });
+    } catch (_) {
+      // Skip elements with malformed proof JSON (mirrors extractPageData).
+    }
+  }
+  return quotes.length > 0 ? { attestation: null, text: '', quotes, quoteOnly: true } : null;
+}
+
+// ── Frame reporting ─────────────────────────────────────────────────────────
+//
+// This script runs in every frame (manifest `all_frames`), including nested
+// and sandboxed/srcdoc/blob iframes such as Claude artifacts. Each frame
+// reports only its own document; the background worker aggregates frames per
+// tab. Pages that render content after load (SPAs, artifact viewers) are
+// handled by re-scanning on DOM mutations and re-reporting when the extracted
+// data changes.
+
+const RESCAN_DELAY_MS = 500;
+const WATCHED_ATTRIBUTES = [
+  'data-indelible',
+  'data-indelible-quote',
+  'data-indelible-include',
+  'data-indelible-exclude',
+];
+
+/** Identifies this document to the background worker (see INDELIBLE_FRAME_GONE). */
+const DOC_TOKEN = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+
+/** JSON of the last data reported, used to skip redundant reports. */
+let lastSignature = null;
+/** Whether this frame currently has data registered with the background. */
+let reported = false;
+let rescanTimer = null;
+let observer = null;
+
+function extensionAlive() {
+  try {
+    return Boolean(browserAPI.runtime?.id);
+  } catch (_) {
+    return false;
+  }
+}
+
+function send(message) {
+  try {
+    const result = browserAPI.runtime.sendMessage(message);
+    result?.catch?.(() => {});
+  } catch (_) {
+    // Extension was reloaded or removed — stop watching this document.
+    observer?.disconnect();
+  }
+}
+
+/**
+ * Scan this document and report its Indelible data to the background worker
+ * if it changed since the last report.
+ *
+ * @param {boolean} [force]  Report even if unchanged (e.g. after the worker restarted).
+ */
+function scanAndReport(force = false) {
+  if (!extensionAlive()) {
+    observer?.disconnect();
+    return;
+  }
+
+  const data = getPageData();
+  const signature = JSON.stringify(data);
+  if (!force && signature === lastSignature) return;
+  lastSignature = signature;
+
+  if (data) {
+    // The previous badges belong to the old data; fresh results will follow.
+    lastQuoteResults = [];
+    removeQuoteBadges();
+    send({
+      type: 'INDELIBLE_FRAME_DATA',
+      docToken: DOC_TOKEN,
+      data: { ...data, fullPageLength: document.body?.innerText.length ?? 0 },
+    });
+    reported = true;
+  } else if (reported) {
+    removeQuoteBadges();
+    send({ type: 'INDELIBLE_FRAME_GONE', docToken: DOC_TOKEN });
+    reported = false;
+  }
+}
+
+function scheduleRescan() {
+  if (rescanTimer) return;
+  rescanTimer = setTimeout(() => {
+    rescanTimer = null;
+    scanAndReport();
+  }, RESCAN_DELAY_MS);
+}
+
 // ── Messaging ────────────────────────────────────────────────────────────────
 
 // Respond to requests from the popup.
 browserAPI.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (msg.type === 'GET_INDELIBLE_DATA') {
-    const data = extractPageData();
-    sendResponse(data ? { ...data, fullPageLength: document.body.innerText.length } : null);
+  if (msg.type === 'RESEND_INDELIBLE') {
+    // The background worker lost its state (e.g. it was restarted) — report again.
+    scanAndReport(true);
+    sendResponse({ ok: true });
   } else if (msg.type === 'HIGHLIGHT_INDELIBLE') {
     // Inject highlight styles (idempotent).
     if (!document.getElementById(HIGHLIGHT_STYLE_ID)) {
@@ -189,11 +302,25 @@ browserAPI.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   return true;
 });
 
-// On initial load, notify the background service worker so it can set
-// the extension badge for this tab.
-(function notifyBackground() {
-  const data = extractPageData();
-  if (data) {
-    browserAPI.runtime.sendMessage({ type: 'INDELIBLE_DETECTED', data });
-  }
-})();
+// Report on initial load, then keep watching for content rendered later.
+scanAndReport();
+
+observer = new MutationObserver(scheduleRescan);
+observer.observe(document.documentElement, {
+  childList: true,
+  subtree: true,
+  characterData: true,
+  attributes: true,
+  attributeFilter: WATCHED_ATTRIBUTES,
+});
+
+// Unregister this frame when its document goes away (iframe removed or
+// navigated), and re-register if it is restored from the back/forward cache.
+window.addEventListener('pagehide', () => {
+  if (reported) send({ type: 'INDELIBLE_FRAME_GONE', docToken: DOC_TOKEN });
+  reported = false;
+  lastSignature = null;
+});
+window.addEventListener('pageshow', (event) => {
+  if (event.persisted) scanAndReport(true);
+});
