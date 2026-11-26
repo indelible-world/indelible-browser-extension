@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
   "name": "Indelible Verifier",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Detect and verify Indelible-attested articles and quotes on any webpage.",
 
-  "permissions": ["activeTab", "storage", "tabs"],
+  "permissions": ["activeTab", "storage"],
   "host_permissions": ["<all_urls>"],
 
   "background": {
@@ -31,7 +31,7 @@
 
   "content_scripts": [
     {
-      "matches": ["http://*/*", "https://*/*"],
+      "matches": ["http://*/*", "https://*/*", "file:///*"],
       "js": ["dist/content.js"],
       "run_at": "document_idle",
       "all_frames": true,
