@@ -14,6 +14,10 @@ A Manifest V3 browser extension (Chrome and Firefox) that detects and verifies [
 - **Chain & RPC settings** — supports Ethereum, Arbitrum, Base, and Sepolia; accepts a custom RPC URL per chain
 - **Download attestation reference** — exports a `attestation-reference.json` file after a successful verification
 
+
+### Want to be able to verify local files on Firefox?
+Go to about:addons, click Manage on the Indelible Verifier extension, go to Permissions, and enable "Access to local files on your computer". Then you can open a local HTML file in Firefox and verify it.
+
 ---
 
 ## Project Structure
